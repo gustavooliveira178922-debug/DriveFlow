@@ -69,18 +69,65 @@ class _OverviewView extends StatelessWidget {
         ]),
         const SizedBox(height: 22),
         if (compact) ...[
-          _Panel(title: 'Recent files', action: 'Browse files', child: SizedBox(height: 180, child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.insert_drive_file_outlined, size: 30, color: DriveFlowTheme.muted.withValues(alpha: .7)), const SizedBox(height: 10), const Text('Your recent files will show up here', style: TextStyle(fontWeight: FontWeight.w600)), const SizedBox(height: 4), const Text('Add a folder to start building your local index.', style: TextStyle(fontSize: 12, color: DriveFlowTheme.muted))])))),
+          _RecentFilesPanel(height: 180),
           const SizedBox(height: 16),
-          _Panel(title: 'Transfer queue', action: 'View all', child: SizedBox(height: 160, child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.cloud_queue_outlined, size: 30, color: DriveFlowTheme.muted), const SizedBox(height: 10), const Text('Queue is clear', style: TextStyle(fontWeight: FontWeight.w600)), const SizedBox(height: 4), Text('New files will be sent to $chat.', style: const TextStyle(fontSize: 12, color: DriveFlowTheme.muted))])))),
+          _TransferQueuePanel(chat: chat, height: 160),
         ] else Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Expanded(flex: 3, child: _Panel(title: 'Recent files', action: 'Browse files', child: SizedBox(height: 208, child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.insert_drive_file_outlined, size: 30, color: DriveFlowTheme.muted.withValues(alpha: .7)), const SizedBox(height: 10), const Text('Your recent files will show up here', style: TextStyle(fontWeight: FontWeight.w600)), const SizedBox(height: 4), const Text('Add a folder to start building your local index.', style: TextStyle(fontSize: 12, color: DriveFlowTheme.muted))])))),
+          Expanded(flex: 3, child: _RecentFilesPanel(height: 208)),
           const SizedBox(width: 18),
-          Expanded(flex: 2, child: _Panel(title: 'Transfer queue', action: 'View all', child: SizedBox(height: 208, child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.cloud_queue_outlined, size: 30, color: DriveFlowTheme.muted), const SizedBox(height: 10), const Text('Queue is clear', style: TextStyle(fontWeight: FontWeight.w600)), const SizedBox(height: 4), Text('New files will be sent to $chat.', style: const TextStyle(fontSize: 12, color: DriveFlowTheme.muted))]))))),
+          Expanded(flex: 2, child: _TransferQueuePanel(chat: chat, height: 208)),
         ]),
         const SizedBox(height: 22),
         _DropPanel(chat: chat),
       ]));
   });
+}
+
+class _RecentFilesPanel extends StatelessWidget {
+  const _RecentFilesPanel({required this.height});
+  final double height;
+
+  @override
+  Widget build(BuildContext context) => _Panel(
+        title: 'Recent files',
+        action: 'Browse files',
+        child: SizedBox(
+          height: height,
+          child: Center(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.insert_drive_file_outlined, size: 30, color: DriveFlowTheme.muted.withValues(alpha: .7)),
+              const SizedBox(height: 10),
+              const Text('Your recent files will show up here', style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 4),
+              const Text('Add a folder to start building your local index.', style: TextStyle(fontSize: 12, color: DriveFlowTheme.muted)),
+            ]),
+          ),
+        ),
+      );
+}
+
+class _TransferQueuePanel extends StatelessWidget {
+  const _TransferQueuePanel({required this.chat, required this.height});
+  final String chat;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) => _Panel(
+        title: 'Transfer queue',
+        action: 'View all',
+        child: SizedBox(
+          height: height,
+          child: Center(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.cloud_queue_outlined, size: 30, color: DriveFlowTheme.muted),
+              const SizedBox(height: 10),
+              const Text('Queue is clear', style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 4),
+              Text('New files will be sent to $chat.', style: const TextStyle(fontSize: 12, color: DriveFlowTheme.muted)),
+            ]),
+          ),
+        ),
+      );
 }
 
 class _StorageCard extends StatelessWidget {

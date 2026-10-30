@@ -31,6 +31,7 @@ jobs:
         run: |
           flutter create --project-name driveflow --platforms=windows,macos,android .
           flutter pub get
+          Remove-Item test/widget_test.dart -ErrorAction SilentlyContinue
       - name: Build Rust core
         working-directory: core/rust
         run: cargo build --release --target x86_64-pc-windows-msvc
@@ -91,6 +92,7 @@ jobs:
         run: |
           flutter create --project-name driveflow --platforms=windows,macos,android .
           flutter pub get
+          rm -f test/widget_test.dart
       - name: Build Android Rust libraries
         working-directory: core/rust
         run: cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ../../apps/flutter_app/android/app/src/main/jniLibs build --release
@@ -133,6 +135,7 @@ jobs:
         run: |
           flutter create --project-name driveflow --platforms=windows,macos,android .
           flutter pub get
+          rm -f test/widget_test.dart
       - name: Build universal Rust core
         working-directory: core/rust
         run: |
