@@ -102,6 +102,14 @@ impl TelegramBridge {
         self.send_request(&json!({ "@type": "getChat", "chat_id": chat_id }))
     }
 
+    pub fn request_chat_history(&self, chat_id: i64, limit: i32) -> Result<(), TelegramError> {
+        self.send_request(&json!({ "@type": "getChatHistory", "chat_id": chat_id, "from_message_id": 0, "offset": 0, "limit": limit.clamp(1, 100), "only_local": false, "@extra": "driveflow_history" }))
+    }
+
+    pub fn download_file(&self, file_id: i32) -> Result<(), TelegramError> {
+        self.send_request(&json!({ "@type": "downloadFile", "file_id": file_id, "priority": 32, "offset": 0, "limit": 0, "synchronous": false }))
+    }
+
     pub fn send_file(&self, chat_id: i64, path: &str, caption: &str) -> Result<(), TelegramError> {
         self.send_request(&json!({
             "@type": "sendMessage", "chat_id": chat_id,

@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -13,6 +15,16 @@ class TelegramChat {
   final int id;
   final String title;
   final bool isSelf;
+}
+
+class TelegramRemoteFile {
+  const TelegramRemoteFile({required this.id, required this.name, required this.size, required this.downloaded, required this.downloading, required this.localPath});
+  final int id;
+  final String name;
+  final int size;
+  final bool downloaded;
+  final bool downloading;
+  final String localPath;
 }
 
 /// Flutter facade over the Rust/TDLib FFI. The Rust core owns the Telegram
@@ -72,7 +84,106 @@ class TelegramService {
     }).toList(growable: false);
   }
 
-  Future<void> sendFile({required int chatId, required String path}) async => _expectOk(_native.sendFile(chatId, path));
+  Future<List<TelegramRemoteFile>> fetchChatFiles(int chatId) async {
+    _native.getTelegramStatus();
+    final response = _read(_native.getTelegramHistory(chatId, limit: 100));
+    if (response['ok'] != true) throw StateError(_friendlyError(response['error']));
+    final messages = response['messages'] as List<dynamic>? ?? const [];
+    final files = <TelegramRemoteFile>[];
+    for (final raw in messages) {
+      final message = raw as Map<String, dynamic>;
+      final content = message['content'] as Map<String, dynamic>?;
+      if (content?['@type'] != 'messageDocument') continue;
+      final document = content?['document'] as Map<String, dynamic>?;
+      final file = document?['document'] as Map<String, dynamic>?;
+      final local = file?['local'] as Map<String, dynamic>?;
+      final id = int.tryParse(file?['id']?.toString() ?? '');
+      if (id == null) continue;
+      files.add(TelegramRemoteFile(
+        id: id,
+        name: (document?['file_name'] as String?) ?? 'Telegram file',
+        size: int.tryParse(file?['size']?.toString() ?? '') ?? 0,
+        downloaded: local?['is_downloading_completed'] == true,
+        downloading: local?['is_downloading_active'] == true,
+        localPath: (local?['path'] as String?) ?? '',
+      ));
+    }
+    return files;
+  }
+
+  Future<void> downloadFile(int fileId) async => _expectOk(_native.downloadTelegramFile(fileId));
+
+  // Stay below Telegram's standard per-file upload ceiling. Parts are copied
+  // with streams (never buffered into RAM), then a small JSON manifest is sent
+  // last so DriveFlow can reassemble the original in one operation.
+  static const int _partLimit = 1900 * 1024 * 1024;
+
+  Future<void> sendFile({required int chatId, required String path}) async {
+    final source = File(path);
+    final length = await source.length();
+    if (length <= _partLimit) {
+      _expectOk(_native.sendFile(chatId, path));
+      return;
+    }
+
+    final partCount = (length + _partLimit - 1) ~/ _partLimit;
+    final checksum = (await sha256.bind(source.openRead()).first).toString();
+    final id = '${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 32).toRadixString(16)}';
+    final workDirectory = Directory('${Directory.systemTemp.path}${Platform.pathSeparator}driveflow-parts${Platform.pathSeparator}$id');
+    await workDirectory.create(recursive: true);
+    final parts = <String>[];
+    for (var index = 0; index < partCount; index++) {
+      final start = index * _partLimit;
+      final end = min(start + _partLimit, length);
+      final partName = '${source.uri.pathSegments.last}.part-${(index + 1).toString().padLeft(4, '0')}-of-${partCount.toString().padLeft(4, '0')}.dflow';
+      final part = File('${workDirectory.path}${Platform.pathSeparator}$partName');
+      await source.openRead(start, end).pipe(part.openWrite());
+      if (await part.length() != end - start) throw StateError('A DriveFlow part was not written completely.');
+      parts.add(part.path);
+      final caption = 'DriveFlow part $id ${index + 1}/$partCount';
+      _expectOk(_native.sendFile(chatId, part.path, caption: caption));
+    }
+
+    final manifest = File('${workDirectory.path}${Platform.pathSeparator}${source.uri.pathSegments.last}.driveflow.json');
+    await manifest.writeAsString(jsonEncode({
+      'format': 'driveflow-parts-v1',
+      'id': id,
+      'name': source.uri.pathSegments.last,
+      'size': length,
+      'sha256': checksum,
+      'parts': parts.map((path) => path.split(Platform.pathSeparator).last).toList(),
+    }), flush: true);
+    _expectOk(_native.sendFile(chatId, manifest.path, caption: 'DriveFlow recovery manifest $id'));
+  }
+
+  /// Rebuild a split file selected from disk using its manifest and part files.
+  Future<String> joinParts({required String manifestPath, required List<String> selectedPartPaths, required String outputDirectory}) async {
+    final manifest = jsonDecode(await File(manifestPath).readAsString()) as Map<String, dynamic>;
+    if (manifest['format'] != 'driveflow-parts-v1') throw const FormatException('This is not a DriveFlow parts manifest.');
+    final expected = (manifest['parts'] as List<dynamic>).cast<String>();
+    final byName = {for (final path in selectedPartPaths) path.split(Platform.pathSeparator).last: path};
+    if (expected.any((name) => !byName.containsKey(name))) throw StateError('Select every part listed in this manifest.');
+    final destination = File('$outputDirectory${Platform.pathSeparator}${manifest['name']}');
+    if (await destination.exists()) throw StateError('A file with that name already exists in the destination folder.');
+    final output = destination.openWrite();
+    try {
+      for (final name in expected) {
+        await output.addStream(File(byName[name]!).openRead());
+      }
+    } finally {
+      await output.close();
+    }
+    if (await destination.length() != manifest['size']) {
+      await destination.delete();
+      throw StateError('The reconstructed file size does not match its manifest.');
+    }
+    final checksum = (await sha256.bind(destination.openRead()).first).toString();
+    if (checksum != manifest['sha256']) {
+      await destination.delete();
+      throw StateError('The reconstructed file failed its integrity check.');
+    }
+    return destination.path;
+  }
 
   Future<String> _getOrCreateEncryptionKey() async {
     final existing = await _secureStorage.read(key: _keyName);

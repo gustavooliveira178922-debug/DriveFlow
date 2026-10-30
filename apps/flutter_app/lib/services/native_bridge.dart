@@ -63,14 +63,29 @@ final class NativeBridge {
   String submitPassword(String password) => _callString('driveflow_telegram_password', password);
   String getTelegramChats() => _call0('driveflow_telegram_chats');
 
-  String sendFile(int chatId, String path) {
+  String getTelegramHistory(int chatId, {int limit = 60}) {
+    final library = _library;
+    if (library == null) return '{"ok":false,"error":"native_core_unavailable"}';
+    final call = library.lookupFunction<ffi.Pointer<Utf8> Function(ffi.Int64, ffi.Int32), ffi.Pointer<Utf8> Function(int, int)>('driveflow_telegram_history');
+    return _take(call(chatId, limit));
+  }
+
+  String downloadTelegramFile(int fileId) {
+    final library = _library;
+    if (library == null) return '{"ok":false,"error":"native_core_unavailable"}';
+    final call = library.lookupFunction<ffi.Pointer<Utf8> Function(ffi.Int32), ffi.Pointer<Utf8> Function(int)>('driveflow_telegram_download_file');
+    return _take(call(fileId));
+  }
+
+  String sendFile(int chatId, String path, {String caption = ''}) {
     final library = _library;
     if (library == null) return '{"ok":false,"error":"native_core_unavailable"}';
     final nativePath = path.toNativeUtf8();
+    final nativeCaption = caption.toNativeUtf8();
     try {
-      final call = library.lookupFunction<ffi.Pointer<Utf8> Function(ffi.Int64, ffi.Pointer<Utf8>), ffi.Pointer<Utf8> Function(int, ffi.Pointer<Utf8>)>('driveflow_telegram_send_file');
-      return _take(call(chatId, nativePath));
-    } finally { calloc.free(nativePath); }
+      final call = library.lookupFunction<ffi.Pointer<Utf8> Function(ffi.Int64, ffi.Pointer<Utf8>, ffi.Pointer<Utf8>), ffi.Pointer<Utf8> Function(int, ffi.Pointer<Utf8>, ffi.Pointer<Utf8>)>('driveflow_telegram_send_file');
+      return _take(call(chatId, nativePath, nativeCaption));
+    } finally { calloc.free(nativePath); calloc.free(nativeCaption); }
   }
 
   String _call0(String symbol) {

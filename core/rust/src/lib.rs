@@ -21,6 +21,9 @@ struct Session {
     authorization_state: String,
     error: Option<String>,
     chats: Vec<Value>,
+    history_chat_id: Option<i64>,
+    messages: Vec<Value>,
+    files: Vec<Value>,
 }
 
 static SESSION: OnceLock<Mutex<Option<Session>>> = OnceLock::new();
@@ -56,7 +59,7 @@ pub unsafe extern "C" fn driveflow_telegram_start(api_id: i32, api_hash: *const 
         let bridge = TelegramBridge::load().map_err(|e| e.to_string())?;
         let mut guard = session().lock().map_err(|_| "session_lock_poisoned")?;
         *guard = Some(Session { bridge, api_id, api_hash: hash, database_dir: dir, encryption_key: key,
-            parameters_sent: false, chats_requested: false, authorization_state: "authorizationStateWaitTdlibParameters".into(), error: None, chats: Vec::new() });
+            parameters_sent: false, chats_requested: false, authorization_state: "authorizationStateWaitTdlibParameters".into(), error: None, chats: Vec::new(), history_chat_id: None, messages: Vec::new(), files: Vec::new() });
         Ok(json!({"ok":true}))
     })();
     into_c_string(result.unwrap_or_else(|e| json!({"ok":false,"error":e})).to_string())
@@ -87,8 +90,44 @@ pub unsafe extern "C" fn driveflow_telegram_password(password: *const c_char) ->
     with_input(password, "password", |s, v| s.bridge.submit_password(v).map_err(|e| e.to_string()))
 }
 #[no_mangle]
-pub unsafe extern "C" fn driveflow_telegram_send_file(chat_id: i64, path: *const c_char) -> *mut c_char {
-    with_input(path, "path", |s, v| s.bridge.send_file(chat_id, v, "").map_err(|e| e.to_string()))
+pub unsafe extern "C" fn driveflow_telegram_send_file(chat_id: i64, path: *const c_char, caption: *const c_char) -> *mut c_char {
+    let result = (|| -> Result<Value, String> {
+        if path.is_null() || caption.is_null() { return Err("missing_argument".into()); }
+        let path = CStr::from_ptr(path).to_str().map_err(|_| "invalid_path")?;
+        let caption = CStr::from_ptr(caption).to_str().map_err(|_| "invalid_caption")?;
+        let mut guard = session().lock().map_err(|_| "session_lock_poisoned")?;
+        let current = guard.as_mut().ok_or("telegram_not_started")?;
+        current.bridge.send_file(chat_id, path, caption).map_err(|e| e.to_string())?;
+        Ok(json!({"ok":true}))
+    })();
+    into_c_string(result.unwrap_or_else(|e| json!({"ok":false,"error":e})).to_string())
+}
+
+#[no_mangle]
+pub extern "C" fn driveflow_telegram_history(chat_id: i64, limit: i32) -> *mut c_char {
+    let result = (|| -> Result<Value, String> {
+        let mut guard = session().lock().map_err(|_| "session_lock_poisoned".to_string())?;
+        let current = guard.as_mut().ok_or_else(|| "telegram_not_started".to_string())?;
+        if current.history_chat_id != Some(chat_id) {
+            current.bridge.request_chat_history(chat_id, limit).map_err(|e| e.to_string())?;
+            current.history_chat_id = Some(chat_id);
+            current.messages.clear();
+        }
+        Ok(json!({"ok":true,"messages":current.messages,"files":current.files}))
+    })();
+    into_c_string(result.unwrap_or_else(|e| json!({"ok":false,"error":e})).to_string())
+}
+
+#[no_mangle]
+pub extern "C" fn driveflow_telegram_download_file(file_id: i32) -> *mut c_char {
+    let result = (|| -> Result<Value, String> {
+        if file_id <= 0 { return Err("invalid_file_id".into()); }
+        let mut guard = session().lock().map_err(|_| "session_lock_poisoned".to_string())?;
+        let current = guard.as_mut().ok_or_else(|| "telegram_not_started".to_string())?;
+        current.bridge.download_file(file_id).map_err(|e| e.to_string())?;
+        Ok(json!({"ok":true}))
+    })();
+    into_c_string(result.unwrap_or_else(|e| json!({"ok":false,"error":e})).to_string())
 }
 
 /// Poll one serialized TDLib response and expose the current auth/chats snapshot.
@@ -122,11 +161,25 @@ pub extern "C" fn driveflow_telegram_status() -> *mut c_char {
             } else if kind == "updateChatTitle" {
                 let id = update.get("chat_id");
                 if let Some(chat) = s.chats.iter_mut().find(|c| c.get("id") == id) { chat["title"] = update.get("title").cloned().unwrap_or(Value::Null); }
+            } else if kind == "messages" && update.get("@extra").and_then(Value::as_str) == Some("driveflow_history") {
+                s.messages = update.get("messages").and_then(Value::as_array).cloned().unwrap_or_default();
+            } else if kind == "updateFile" {
+                if let Some(file) = update.get("file") {
+                    if let Some(id) = file.get("id") {
+                        if let Some(existing) = s.files.iter_mut().find(|item| item.get("id") == Some(id)) { *existing = file.clone(); }
+                        else { s.files.push(file.clone()); }
+                        for message in &mut s.messages {
+                            if message.pointer("/content/document/document/file/id") == Some(id) {
+                                if let Some(slot) = message.pointer_mut("/content/document/document/file") { *slot = file.clone(); }
+                            }
+                        }
+                    }
+                }
             } else if kind == "error" {
                 s.error = update.get("message").and_then(Value::as_str).map(str::to_owned);
             }
         }
-        Ok(json!({"ok":true,"authorization_state":s.authorization_state,"error":s.error,"chats":s.chats}))
+        Ok(json!({"ok":true,"authorization_state":s.authorization_state,"error":s.error,"chats":s.chats,"messages":s.messages,"files":s.files}))
     })();
     into_c_string(result.unwrap_or_else(|e| json!({"ok":false,"error":e})).to_string())
 }

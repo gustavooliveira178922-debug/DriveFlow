@@ -2,7 +2,7 @@
 
 DriveFlow is a native Flutter application with a Rust core for organizing files and transferring them directly to the user's own Telegram account. It has no ads, subscriptions, or relay server. Desktop builds use Flutter's native Windows/macOS runners; Android uses a native APK. There is no browser shell or WebView.
 
-> Telegram sign-in, personal chat discovery, and direct document sends are wired through Rust FFI and TDLib. Release builds compile and bundle TDLib per platform. Transfer progress controls, queue persistence, local recursive file indexing, and store signing/notarization remain future work.
+> Telegram sign-in, personal chat discovery, direct document sends, desktop drag-and-drop, local folder management, and split-file recovery are wired through Flutter/Rust FFI and TDLib. Release builds compile and bundle TDLib for Windows and macOS. Transfer progress controls, persisted queues, and store signing/notarization remain future work.
 
 ## Layout
 
@@ -54,7 +54,7 @@ Provide `api_id` and `api_hash` through a secure build-time configuration mechan
 
 ## Releases
 
-Push a version tag such as `v1.0.0`. `.github/workflows/release.yml` builds a Windows x64 installer, Android release APK, and macOS DMG, then attaches them to a GitHub Release. GitHub repository secrets expected by release builds:
+Push a version tag such as `v1.0.11`. `.github/workflows/release.yml` builds a Windows x64 installer and macOS DMG, then attaches them to a GitHub Release. Android is intentionally released separately. GitHub repository secrets expected by release builds:
 
 - `TELEGRAM_API_ID`
 - `TELEGRAM_API_HASH`
@@ -65,10 +65,9 @@ Unsigned builds are suitable for internal distribution only; Windows SmartScreen
 
 Artifact names:
 
-- `DriveFlow-Setup-v1.0.0-x64.exe`
-- `DriveFlow-Android-v1.0.0-release.apk`
-- `DriveFlow-macOS-v1.0.0.dmg`
+- `DriveFlow-Setup-v1.0.11-x64.exe`
+- `DriveFlow-macOS-v1.0.11.dmg`
 
 ## Current scope
 
-The app currently supports account sign-in, personal-chat selection, and file-picker sends. It does not yet provide a resumable upload queue, pause/cancel controls, drag-and-drop, local recursive indexing, or signing/notarization. GitHub Actions is the validation path for native builds because Flutter and Rust toolchains are not installed in this local workspace. No fake Telegram data or relay backend is included.
+The app supports account sign-in, personal-chat selection, file-picker and desktop drag-and-drop sends, local folders, recent Telegram document browsing, direct downloads, and large-file splitting. Selecting a DriveFlow manifest downloads its parts and rebuilds the original in one flow; SHA-256 is checked before saving. It does not yet provide a resumable upload queue, pause/cancel controls, or signing/notarization. GitHub Actions is the validation path for native builds because Flutter and Rust toolchains are not installed in this local workspace. No fake Telegram data or relay backend is included.

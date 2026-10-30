@@ -95,82 +95,6 @@ jobs:
           name: windows-installer
           path: build/installer/DriveFlow-Setup-*.exe
 
-  android:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
-      - uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r27c
-          link-to-sdk: true
-      - name: Build TDLib JSON libraries for Android
-        shell: bash
-        run: |
-          set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y gperf php-cli perl ninja-build
-          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-          if [[ -z "$sdk_root" ]]; then echo 'Android SDK root is not configured.' >&2; exit 1; fi
-          sdkmanager="$sdk_root/cmdline-tools/latest/bin/sdkmanager"
-          if [[ ! -x "$sdkmanager" ]]; then sdkmanager="$(find "$sdk_root/cmdline-tools" -type f -name sdkmanager -print -quit)"; fi
-          if [[ -z "$sdkmanager" || ! -x "$sdkmanager" ]]; then echo "sdkmanager not found in $sdk_root/cmdline-tools" >&2; exit 1; fi
-          "$sdkmanager" "platforms;android-34" "cmake;3.22.1"
-          test -f "$sdk_root/ndk/27.2.12479018/source.properties"
-          td="$RUNNER_TEMP/tdlib-src"
-          git init "$td"
-          git -C "$td" remote add origin https://github.com/tdlib/td.git
-          git -C "$td" fetch --depth 1 origin 0e88653dcbf4e44c73cb655a05b58cd749a91169
-          git -C "$td" checkout --detach FETCH_HEAD
-          cd "$td/example/android"
-          ./build-openssl.sh "$ANDROID_SDK_ROOT" 27.2.12479018 third-party/openssl openssl-3.3.0
-          ./build-tdlib.sh "$ANDROID_SDK_ROOT" 27.2.12479018 third-party/openssl c++_static JSON 21 "arm64-v8a armeabi-v7a x86_64"
-          for abi in arm64-v8a armeabi-v7a x86_64; do
-            mkdir -p "$GITHUB_WORKSPACE/apps/flutter_app/android/app/src/main/jniLibs/$abi"
-            cp "tdlib/libs/$abi/libtdjson.so" "$GITHUB_WORKSPACE/apps/flutter_app/android/app/src/main/jniLibs/$abi/"
-          done
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-ndk
-      - name: Generate native runner and fetch packages
-        working-directory: apps/flutter_app
-        run: |
-          flutter create --project-name driveflow --platforms=windows,macos,android .
-          flutter pub get
-          rm -f test/widget_test.dart
-      - name: Build Android Rust libraries
-        working-directory: core/rust
-        run: cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ../../apps/flutter_app/android/app/src/main/jniLibs build --release
-      - name: Analyze Flutter app
-        working-directory: apps/flutter_app
-        run: |
-          set +e
-          flutter analyze --no-pub 2>&1 | tee /tmp/driveflow-analyze.log
-          status=${PIPESTATUS[0]}
-          if [ "$status" -ne 0 ]; then
-            while IFS= read -r line; do
-              safe=$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g' -e 's/\n/%0A/g')
-              echo "::error title=Flutter analysis::$safe"
-            done < /tmp/driveflow-analyze.log
-          fi
-          if [ "$status" -ne 0 ]; then echo "::warning title=Flutter analysis::Analyzer returned $status; continuing to native build."; fi
-          exit 0
-      - name: Build APK
-        working-directory: apps/flutter_app
-        env:
-          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
-          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
-        run: flutter build apk --release --dart-define=TELEGRAM_API_ID=$TELEGRAM_API_ID --dart-define=TELEGRAM_API_HASH=$TELEGRAM_API_HASH
-      - uses: actions/upload-artifact@v4
-        with:
-          name: android-apks
-          path: apps/flutter_app/build/app/outputs/flutter-apk/*.apk
-
   macos:
     runs-on: macos-latest
     steps:
@@ -255,7 +179,7 @@ jobs:
           path: build/release/DriveFlow-macOS-*.dmg
 
   publish:
-    needs: [windows, android, macos]
+    needs: [windows, macos]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -268,7 +192,6 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           mkdir -p release
           find release-assets/windows-installer -name '*.exe' -exec cp {} "release/DriveFlow-Setup-v${version}-x64.exe" \;
-          find release-assets/android-apks -name '*.apk' -exec cp {} "release/DriveFlow-Android-v${version}-release.apk" \;
           find release-assets/macos-dmg -name '*.dmg' -exec cp {} "release/DriveFlow-macOS-v${version}.dmg" \;
       - uses: softprops/action-gh-release@v2
         with:

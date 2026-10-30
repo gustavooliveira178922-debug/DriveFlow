@@ -1,10 +1,14 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:desktop_drop/desktop_drop.dart';
 
 import '../../app/theme.dart';
 import '../../services/native_bridge.dart';
 import '../../services/telegram_service.dart';
+import '../../services/local_library.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({required this.onDisconnect, super.key});
@@ -61,18 +65,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
     final result = await FilePicker.platform.pickFiles(allowMultiple: true, withData: false);
     if (result == null || !mounted) return;
-    for (final file in result.files) {
-      final path = file.path;
-      if (path == null) continue;
+    await _sendPaths(result.files.map((file) => file.path).whereType<String>().toList());
+  }
+
+  Future<void> _sendPaths(List<String> paths) async {
+    if (_selectedChatId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Choose a personal chat first.')));
+      return;
+    }
+    var sent = 0;
+    // Keep two files preparing/sending at once so TDLib can overlap local
+    // reads and network uploads without turning a multi-file drop into an
+    // unbounded burst of disk work.
+    for (var offset = 0; offset < paths.length; offset += 2) {
+      final batch = paths.skip(offset).take(2).toList();
       try {
-        await _telegram.sendFile(chatId: _selectedChatId!, path: path);
+        await Future.wait(batch.map((path) => _telegram.sendFile(chatId: _selectedChatId!, path: path)));
+        sent += batch.length;
       } on Object catch (error) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not send ${file.name}: $error')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not queue ${batch.map((path) => File(path).uri.pathSegments.last).join(', ')}: $error')));
         return;
       }
     }
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Sent ${result.files.length} file(s) to $_chat.')));
+    if (mounted && sent > 0) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Added $sent file(s) to the send queue for $_chat.')));
   }
 
   @override
@@ -97,7 +113,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     CircleAvatar(backgroundColor: DriveFlowTheme.panelRaised, child: IconButton(tooltip: 'Disconnect', onPressed: widget.onDisconnect, icon: const Icon(Icons.person_outline, size: 19))),
                   ]),
                   const SizedBox(height: 28),
-                  Expanded(child: _selected == 3 ? _SettingsView(onDisconnect: widget.onDisconnect) : _OverviewView(chat: _chat, canSend: _selectedChatId != null, onChooseFiles: _chooseFiles)),
+                  Expanded(child: _selected == 1
+                      ? _FilesView(telegram: _telegram, chatId: _selectedChatId)
+                      : _selected == 3
+                          ? _SettingsView(onDisconnect: widget.onDisconnect)
+                          : _OverviewView(chat: _chat, canSend: _selectedChatId != null, onChooseFiles: _chooseFiles, onDropFiles: _sendPaths)),
                     ]),
                   ),
                 ),
@@ -115,10 +135,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
 }
 
 class _OverviewView extends StatelessWidget {
-  const _OverviewView({required this.chat, required this.canSend, required this.onChooseFiles});
+  const _OverviewView({required this.chat, required this.canSend, required this.onChooseFiles, required this.onDropFiles});
   final String chat;
   final bool canSend;
   final VoidCallback onChooseFiles;
+  final ValueChanged<List<String>> onDropFiles;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(builder: (context, constraints) {
@@ -141,7 +162,7 @@ class _OverviewView extends StatelessWidget {
           Expanded(flex: 2, child: _TransferQueuePanel(chat: chat, height: 208)),
         ]),
         const SizedBox(height: 22),
-        _DropPanel(chat: chat, canSend: canSend, onChooseFiles: onChooseFiles),
+        _DropPanel(chat: chat, canSend: canSend, onChooseFiles: onChooseFiles, onDropFiles: onDropFiles),
       ]));
   });
 }
@@ -217,29 +238,45 @@ class _StatCard extends StatelessWidget {
 }
 
 class _Panel extends StatelessWidget {
-  const _Panel({required this.title, required this.action, required this.child});
+  const _Panel({required this.title, required this.action, required this.child, this.onAction});
   final String title;
   final String action;
   final Widget child;
+  final VoidCallback? onAction;
 
   @override
-  Widget build(BuildContext context) => Container(padding: const EdgeInsets.fromLTRB(20, 17, 20, 12), decoration: BoxDecoration(color: DriveFlowTheme.panel, borderRadius: BorderRadius.circular(18), border: Border.all(color: DriveFlowTheme.line)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)), const Spacer(), TextButton(onPressed: () {}, child: Text(action, style: const TextStyle(fontSize: 11, color: DriveFlowTheme.accent)))]), child]));
+  Widget build(BuildContext context) => Container(padding: const EdgeInsets.fromLTRB(20, 17, 20, 12), decoration: BoxDecoration(color: DriveFlowTheme.panel, borderRadius: BorderRadius.circular(18), border: Border.all(color: DriveFlowTheme.line)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)), const Spacer(), if (action.isNotEmpty) TextButton(onPressed: onAction, child: Text(action, style: const TextStyle(fontSize: 11, color: DriveFlowTheme.accent)))]), child]));
 }
 
-class _DropPanel extends StatelessWidget {
-  const _DropPanel({required this.chat, required this.canSend, required this.onChooseFiles});
+class _DropPanel extends StatefulWidget {
+  const _DropPanel({required this.chat, required this.canSend, required this.onChooseFiles, required this.onDropFiles});
   final String chat;
   final bool canSend;
   final VoidCallback onChooseFiles;
+  final ValueChanged<List<String>> onDropFiles;
 
+  @override
+  State<_DropPanel> createState() => _DropPanelState();
+}
+
+class _DropPanelState extends State<_DropPanel> {
+  bool _dragging = false;
   @override
   Widget build(BuildContext context) => LayoutBuilder(builder: (context, constraints) {
         final compact = constraints.maxWidth < 500;
-        final message = Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('Add files to DriveFlow', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)), const SizedBox(height: 4), Text('Choose files or drop them here to send to $chat.', style: const TextStyle(fontSize: 12, color: DriveFlowTheme.muted))]);
-        final button = OutlinedButton.icon(onPressed: canSend ? onChooseFiles : null, icon: const Icon(Icons.upload_file_rounded, size: 17), label: const Text('Choose files'), style: OutlinedButton.styleFrom(foregroundColor: DriveFlowTheme.accent, side: const BorderSide(color: DriveFlowTheme.line)));
-        return Container(height: compact ? 166 : 124, padding: EdgeInsets.symmetric(horizontal: compact ? 16 : 26, vertical: compact ? 14 : 0), decoration: BoxDecoration(color: DriveFlowTheme.panel.withValues(alpha: .68), borderRadius: BorderRadius.circular(18), border: Border.all(color: DriveFlowTheme.line)), child: compact
+        final message = Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('Add files to DriveFlow', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)), const SizedBox(height: 4), Text('Choose files or drop them here to send to ${widget.chat}.', style: const TextStyle(fontSize: 12, color: DriveFlowTheme.muted))]);
+        final button = OutlinedButton.icon(onPressed: widget.canSend ? widget.onChooseFiles : null, icon: const Icon(Icons.upload_file_rounded, size: 17), label: const Text('Choose files'), style: OutlinedButton.styleFrom(foregroundColor: DriveFlowTheme.accent, side: const BorderSide(color: DriveFlowTheme.line)));
+        return DropTarget(
+          onDragEntered: (_) => setState(() => _dragging = true),
+          onDragExited: (_) => setState(() => _dragging = false),
+          onDragDone: (details) {
+            setState(() => _dragging = false);
+            widget.onDropFiles(details.files.map((file) => file.path).where((path) => path.isNotEmpty).toList());
+          },
+          child: AnimatedContainer(duration: const Duration(milliseconds: 160), height: compact ? 166 : 124, padding: EdgeInsets.symmetric(horizontal: compact ? 16 : 26, vertical: compact ? 14 : 0), decoration: BoxDecoration(color: _dragging ? DriveFlowTheme.accent.withValues(alpha: .12) : DriveFlowTheme.panel.withValues(alpha: .68), borderRadius: BorderRadius.circular(18), border: Border.all(color: _dragging ? DriveFlowTheme.accent : DriveFlowTheme.line, width: _dragging ? 1.5 : 1)), child: compact
             ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Container(width: 42, height: 42, decoration: BoxDecoration(color: DriveFlowTheme.accent.withValues(alpha: .1), borderRadius: BorderRadius.circular(14)), child: const Icon(Icons.add_rounded, color: DriveFlowTheme.accent)), const SizedBox(width: 12), Expanded(child: message)]), const Spacer(), Align(alignment: Alignment.centerRight, child: button)])
-            : Row(children: [Container(width: 48, height: 48, decoration: BoxDecoration(color: DriveFlowTheme.accent.withValues(alpha: .1), borderRadius: BorderRadius.circular(15)), child: const Icon(Icons.add_rounded, color: DriveFlowTheme.accent)), const SizedBox(width: 16), Expanded(child: message), button, const SizedBox(width: 22)]));
+            : Row(children: [Container(width: 48, height: 48, decoration: BoxDecoration(color: DriveFlowTheme.accent.withValues(alpha: .1), borderRadius: BorderRadius.circular(15)), child: const Icon(Icons.add_rounded, color: DriveFlowTheme.accent)), const SizedBox(width: 16), Expanded(child: message), button, const SizedBox(width: 22)])),
+        );
       });
 }
 
@@ -250,7 +287,7 @@ class _Sidebar extends StatelessWidget {
   static const _items = [(Icons.grid_view_rounded, 'Overview'), (Icons.folder_copy_outlined, 'Files'), (Icons.swap_vert_rounded, 'Transfers'), (Icons.tune_rounded, 'Settings')];
 
   @override
-  Widget build(BuildContext context) => Container(width: 220, padding: const EdgeInsets.fromLTRB(18, 22, 14, 18), decoration: const BoxDecoration(border: Border(right: BorderSide(color: DriveFlowTheme.line))), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Container(width: 32, height: 32, decoration: BoxDecoration(color: DriveFlowTheme.accent, borderRadius: BorderRadius.circular(11)), child: const Icon(Icons.cloud_done_rounded, size: 18, color: DriveFlowTheme.background)), const SizedBox(width: 9), const Text('driveflow', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 17))]), const SizedBox(height: 42), const Text('WORKSPACE', style: TextStyle(fontSize: 9, color: DriveFlowTheme.muted, letterSpacing: 1.3, fontWeight: FontWeight.w700)), const SizedBox(height: 12), for (var i = 0; i < _items.length; i++) _NavItem(index: i, selected: selected, onSelect: onSelect), const Spacer(), Container(padding: const EdgeInsets.all(13), decoration: BoxDecoration(color: DriveFlowTheme.panel, borderRadius: BorderRadius.circular(14), border: Border.all(color: DriveFlowTheme.line)), child: const Row(children: [Icon(Icons.shield_outlined, size: 17, color: DriveFlowTheme.accent), SizedBox(width: 9), Expanded(child: Text('Private by design\nDirect to Telegram', style: TextStyle(fontSize: 10, height: 1.5, color: DriveFlowTheme.muted)))])), const SizedBox(height: 10), const Padding(padding: EdgeInsets.only(left: 4), child: Text('DRIVEFLOW  ·  1.0.0', style: TextStyle(fontSize: 9, letterSpacing: .7, color: DriveFlowTheme.muted)))]));
+  Widget build(BuildContext context) => Container(width: 220, padding: const EdgeInsets.fromLTRB(18, 22, 14, 18), decoration: const BoxDecoration(border: Border(right: BorderSide(color: DriveFlowTheme.line))), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Container(width: 32, height: 32, decoration: BoxDecoration(color: DriveFlowTheme.accent, borderRadius: BorderRadius.circular(11)), child: const Icon(Icons.cloud_done_rounded, size: 18, color: DriveFlowTheme.background)), const SizedBox(width: 9), const Text('driveflow', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 17))]), const SizedBox(height: 42), const Text('WORKSPACE', style: TextStyle(fontSize: 9, color: DriveFlowTheme.muted, letterSpacing: 1.3, fontWeight: FontWeight.w700)), const SizedBox(height: 12), for (var i = 0; i < _items.length; i++) _NavItem(index: i, selected: selected, onSelect: onSelect), const Spacer(), Container(padding: const EdgeInsets.all(13), decoration: BoxDecoration(color: DriveFlowTheme.panel, borderRadius: BorderRadius.circular(14), border: Border.all(color: DriveFlowTheme.line)), child: const Row(children: [Icon(Icons.shield_outlined, size: 17, color: DriveFlowTheme.accent), SizedBox(width: 9), Expanded(child: Text('Private by design\nDirect to Telegram', style: TextStyle(fontSize: 10, height: 1.5, color: DriveFlowTheme.muted)))])), const SizedBox(height: 10), const Padding(padding: EdgeInsets.only(left: 4), child: Text('DRIVEFLOW  ·  1.0.11', style: TextStyle(fontSize: 9, letterSpacing: .7, color: DriveFlowTheme.muted)))]));
 }
 
 class _NavItem extends StatelessWidget {
@@ -284,4 +321,295 @@ class _SettingsView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(builder: (context, constraints) => Align(alignment: Alignment.topLeft, child: SizedBox(width: constraints.maxWidth < 620 ? constraints.maxWidth : 620, child: _Panel(title: 'Account & privacy', action: '', child: Column(children: [ListTile(contentPadding: EdgeInsets.zero, leading: const Icon(Icons.account_circle_outlined, color: DriveFlowTheme.blue), title: const Text('Telegram account'), subtitle: const Text('Connected account session is managed by TDLib.'), trailing: TextButton(onPressed: onDisconnect, child: const Text('Disconnect'))), const Divider(color: DriveFlowTheme.line), const ListTile(contentPadding: EdgeInsets.zero, leading: Icon(Icons.key_outlined, color: DriveFlowTheme.accent), title: Text('Encrypted local session'), subtitle: Text('TDLib database key should be held in OS secure storage.'))])))));
+}
+
+class _FilesView extends StatefulWidget {
+  const _FilesView({required this.telegram, required this.chatId});
+  final TelegramService telegram;
+  final int? chatId;
+
+  @override
+  State<_FilesView> createState() => _FilesViewState();
+}
+
+class _FilesViewState extends State<_FilesView> {
+  final _library = LocalLibrary();
+  List<String> _roots = const [];
+  String? _root;
+  List<FileSystemEntity> _items = const [];
+  List<TelegramRemoteFile> _remoteFiles = const [];
+  final Map<int, String> _pendingSaveDirectories = {};
+  final Map<int, String> _pendingMerges = {};
+  final Set<int> _requestedMergeParts = {};
+  Timer? _remotePoller;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _reloadRoots();
+    _refreshRemoteFiles();
+    _remotePoller = Timer.periodic(const Duration(seconds: 2), (_) => _refreshRemoteFiles());
+  }
+
+  @override
+  void didUpdateWidget(covariant _FilesView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.chatId != widget.chatId) {
+      _remoteFiles = const [];
+      _refreshRemoteFiles();
+    }
+  }
+
+  @override
+  void dispose() {
+    _remotePoller?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refreshRemoteFiles() async {
+    final chatId = widget.chatId;
+    if (chatId == null) return;
+    try {
+      final files = await widget.telegram.fetchChatFiles(chatId);
+      if (!mounted) return;
+      setState(() => _remoteFiles = files);
+      for (final file in files) {
+        final directory = _pendingSaveDirectories[file.id];
+        if (!file.downloaded || directory == null || file.localPath.isEmpty) continue;
+        _pendingSaveDirectories.remove(file.id);
+        await _copyDownloadedFile(file, directory);
+      }
+      for (final entry in _pendingMerges.entries.toList()) {
+        final manifestFile = _findRemote(files, (file) => file.id == entry.key);
+        if (manifestFile == null || !manifestFile.downloaded || manifestFile.localPath.isEmpty) continue;
+        if (!_requestedMergeParts.contains(entry.key)) {
+          await _requestManifestParts(manifestFile, entry.value, files);
+          continue;
+        }
+        final manifest = jsonDecode(await File(manifestFile.localPath).readAsString()) as Map<String, dynamic>;
+        final names = (manifest['parts'] as List<dynamic>).cast<String>();
+        final partFiles = names.map((name) => _findRemote(files, (file) => file.name == name)).toList();
+        if (partFiles.any((part) => part == null || !part.downloaded || part.localPath.isEmpty)) continue;
+        _pendingMerges.remove(entry.key);
+        _requestedMergeParts.remove(entry.key);
+        final result = await widget.telegram.joinParts(manifestPath: manifestFile.localPath, selectedPartPaths: partFiles.cast<TelegramRemoteFile>().map((part) => part.localPath).toList(), outputDirectory: entry.value);
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Rebuilt complete file: $result')));
+      }
+    } on Object {
+      // TDLib may still be filling the selected chat's history.
+    }
+  }
+
+  Future<void> _saveRemoteFile(TelegramRemoteFile file) async {
+    final directory = await FilePicker.platform.getDirectoryPath(dialogTitle: 'Choose where to save ${file.name}');
+    if (directory == null) return;
+    if (file.name.toLowerCase().endsWith('.driveflow.json')) {
+      _pendingMerges[file.id] = directory;
+      if (file.downloaded && file.localPath.isNotEmpty) {
+        await _requestManifestParts(file, directory, _remoteFiles);
+      } else {
+        try {
+          await widget.telegram.downloadFile(file.id);
+          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Downloading the manifest; DriveFlow will fetch and join every part automatically.')));
+        } on Object catch (error) {
+          _pendingMerges.remove(file.id);
+          _showError(error);
+        }
+      }
+      return;
+    }
+    if (file.downloaded && file.localPath.isNotEmpty) {
+      await _copyDownloadedFile(file, directory);
+      return;
+    }
+    _pendingSaveDirectories[file.id] = directory;
+    try {
+      await widget.telegram.downloadFile(file.id);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Downloading ${file.name} from Telegram…')));
+    } on Object catch (error) {
+      _pendingSaveDirectories.remove(file.id);
+      _showError(error);
+    }
+  }
+
+  Future<void> _requestManifestParts(TelegramRemoteFile manifestFile, String directory, List<TelegramRemoteFile> available) async {
+    try {
+      final manifest = jsonDecode(await File(manifestFile.localPath).readAsString()) as Map<String, dynamic>;
+      if (manifest['format'] != 'driveflow-parts-v1') throw const FormatException('This is not a DriveFlow recovery manifest.');
+      final names = (manifest['parts'] as List<dynamic>).cast<String>();
+      final byName = {for (final file in available) file.name: file};
+      final parts = names.map((name) => byName[name]).toList();
+      if (parts.any((part) => part == null)) throw StateError('This chat is missing one or more parts for this file.');
+      _requestedMergeParts.add(manifestFile.id);
+      for (final part in parts.cast<TelegramRemoteFile>()) {
+        if (!part.downloaded && !part.downloading) await widget.telegram.downloadFile(part.id);
+      }
+      if (parts.every((part) => part!.downloaded)) {
+        _pendingMerges.remove(manifestFile.id);
+        _requestedMergeParts.remove(manifestFile.id);
+        final output = await widget.telegram.joinParts(manifestPath: manifestFile.localPath, selectedPartPaths: parts.cast<TelegramRemoteFile>().map((part) => part.localPath).toList(), outputDirectory: directory);
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Rebuilt complete file: $output')));
+      }
+    } on Object catch (error) {
+      _pendingMerges.remove(manifestFile.id);
+      _requestedMergeParts.remove(manifestFile.id);
+      _showError(error);
+    }
+  }
+
+  Future<void> _copyDownloadedFile(TelegramRemoteFile file, String directory) async {
+    final destination = File('$directory${Platform.pathSeparator}${file.name}');
+    try {
+      if (await destination.exists()) throw StateError('A file named ${file.name} already exists in that folder.');
+      await File(file.localPath).copy(destination.path);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Saved ${file.name}')));
+    } on Object catch (error) { _showError(error); }
+  }
+
+  Future<void> _reloadRoots() async {
+    final roots = await _library.roots();
+    if (!mounted) return;
+    setState(() {
+      _roots = roots;
+      _root = roots.contains(_root) ? _root : (roots.isEmpty ? null : roots.first);
+      _loading = false;
+    });
+    await _reloadContents();
+  }
+
+  Future<void> _reloadContents() async {
+    final root = _root;
+    if (root == null) {
+      if (mounted) setState(() => _items = const []);
+      return;
+    }
+    try {
+      final items = await _library.contents(root);
+      if (mounted) setState(() => _items = items);
+    } on Object catch (error) {
+      _showError(error);
+    }
+  }
+
+  Future<void> _addRoot() async {
+    final path = await FilePicker.platform.getDirectoryPath(dialogTitle: 'Choose a DriveFlow folder');
+    if (path == null) return;
+    await _library.addRoot(path);
+    if (!mounted) return;
+    setState(() => _root = path);
+    await _reloadRoots();
+  }
+
+  Future<String?> _askName(String title, {String initial = ''}) async {
+    final controller = TextEditingController(text: initial);
+    final result = await showDialog<String>(context: context, builder: (context) => AlertDialog(
+      title: Text(title),
+      content: TextField(controller: controller, autofocus: true, decoration: const InputDecoration(labelText: 'Folder name'), onSubmitted: (value) => Navigator.pop(context, value)),
+      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('Save'))],
+    ));
+    controller.dispose();
+    return result;
+  }
+
+  Future<void> _createFolder() async {
+    final root = _root;
+    if (root == null) return;
+    final name = await _askName('Create folder');
+    if (name == null || name.trim().isEmpty) return;
+    try {
+      await _library.createFolder(root, name);
+      await _reloadContents();
+    } on Object catch (error) { _showError(error); }
+  }
+
+  Future<void> _renameFolder(Directory directory) async {
+    final name = await _askName('Rename folder', initial: directory.uri.pathSegments.where((e) => e.isNotEmpty).last);
+    if (name == null || name.trim().isEmpty) return;
+    try {
+      await _library.renameFolder(directory, name);
+      await _reloadContents();
+    } on Object catch (error) { _showError(error); }
+  }
+
+  Future<void> _removeRoot(String root) async {
+    await _library.removeRoot(root);
+    await _reloadRoots();
+  }
+
+  Future<void> _joinParts() async {
+    try {
+      final manifest = await FilePicker.platform.pickFiles(dialogTitle: 'Choose the DriveFlow recovery manifest', type: FileType.custom, allowedExtensions: ['json'], allowMultiple: false);
+      final manifestPath = manifest?.files.single.path;
+      if (manifestPath == null) return;
+      final parts = await FilePicker.platform.pickFiles(dialogTitle: 'Select every part listed in the manifest', allowMultiple: true);
+      if (parts == null) return;
+      final outputDirectory = await FilePicker.platform.getDirectoryPath(dialogTitle: 'Choose where to save the reconstructed file');
+      if (outputDirectory == null) return;
+      final result = await widget.telegram.joinParts(manifestPath: manifestPath, selectedPartPaths: parts.files.map((file) => file.path).whereType<String>().toList(), outputDirectory: outputDirectory);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Rebuilt file: $result')));
+    } on Object catch (error) { _showError(error); }
+  }
+
+  void _showError(Object error) {
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.toString())));
+  }
+
+  String _name(FileSystemEntity item) => item.uri.pathSegments.where((part) => part.isNotEmpty).last;
+  String _rootLabel(String path) {
+    final segments = Directory(path).uri.pathSegments.where((part) => part.isNotEmpty).toList();
+    return segments.isEmpty ? path : segments.last;
+  }
+  TelegramRemoteFile? _findRemote(List<TelegramRemoteFile> files, bool Function(TelegramRemoteFile) test) {
+    for (final file in files) { if (test(file)) return file; }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) => SingleChildScrollView(child: _Panel(title: 'Local files', action: 'Refresh', onAction: _reloadContents, child: _loading
+      ? const SizedBox(height: 180, child: Center(child: CircularProgressIndicator()))
+      : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            for (final root in _roots)
+              InputChip(label: Text(_rootLabel(root), overflow: TextOverflow.ellipsis), selected: root == _root, onPressed: () async { setState(() => _root = root); await _reloadContents(); }, onDeleted: () => _removeRoot(root)),
+            OutlinedButton.icon(onPressed: _addRoot, icon: const Icon(Icons.add_rounded, size: 16), label: const Text('Add folder')),
+          ]),
+          const SizedBox(height: 12),
+          Wrap(spacing: 8, children: [
+            FilledButton.tonalIcon(onPressed: _root == null ? null : _createFolder, icon: const Icon(Icons.create_new_folder_outlined, size: 17), label: const Text('New folder')),
+            OutlinedButton.icon(onPressed: _joinParts, icon: const Icon(Icons.unarchive_outlined, size: 17), label: const Text('Rebuild split file')),
+          ]),
+          const SizedBox(height: 12),
+          if (_root == null) const Padding(padding: EdgeInsets.symmetric(vertical: 44), child: Center(child: Text('Add a local folder to organize and rename folders here.', textAlign: TextAlign.center, style: TextStyle(color: DriveFlowTheme.muted))))
+          else if (_items.isEmpty) const Padding(padding: EdgeInsets.symmetric(vertical: 32), child: Center(child: Text('This folder is empty.', style: TextStyle(color: DriveFlowTheme.muted))))
+          else for (final item in _items)
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(item is Directory ? Icons.folder_rounded : Icons.insert_drive_file_outlined, color: item is Directory ? DriveFlowTheme.accent : DriveFlowTheme.blue),
+              title: Text(_name(item), overflow: TextOverflow.ellipsis),
+              subtitle: Text(item is Directory ? 'Folder' : 'Local file', style: const TextStyle(color: DriveFlowTheme.muted, fontSize: 11)),
+              trailing: item is Directory ? IconButton(tooltip: 'Rename folder', onPressed: () => _renameFolder(item), icon: const Icon(Icons.edit_outlined, size: 18)) : null,
+            ),
+          const Divider(color: DriveFlowTheme.line, height: 26),
+          Row(children: [const Expanded(child: Text('Recent files in selected Telegram chat', style: TextStyle(fontWeight: FontWeight.w600))), IconButton(tooltip: 'Refresh Telegram files', onPressed: _refreshRemoteFiles, icon: const Icon(Icons.refresh_rounded, size: 18))]),
+          if (widget.chatId == null) const Padding(padding: EdgeInsets.symmetric(vertical: 20), child: Text('Choose a Telegram chat to browse its recent files.', style: TextStyle(color: DriveFlowTheme.muted)))
+          else if (_remoteFiles.isEmpty) const Padding(padding: EdgeInsets.symmetric(vertical: 20), child: Text('No recent document messages found.', style: TextStyle(color: DriveFlowTheme.muted)))
+          else for (final file in _remoteFiles)
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.cloud_download_outlined, color: DriveFlowTheme.blue),
+              title: Text(file.name, overflow: TextOverflow.ellipsis),
+              subtitle: Text(file.downloaded ? 'Downloaded · ${_formatBytes(file.size)}' : file.downloading ? 'Downloading · ${_formatBytes(file.size)}' : _formatBytes(file.size), style: const TextStyle(color: DriveFlowTheme.muted, fontSize: 11)),
+              trailing: IconButton(tooltip: 'Save file to this device', onPressed: file.downloading ? null : () => _saveRemoteFile(file), icon: Icon(file.downloaded ? Icons.save_alt_rounded : Icons.download_rounded, size: 19)),
+            ),
+        ]),
+  ));
+
+  String _formatBytes(int bytes) {
+    if (bytes >= 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+    if (bytes >= 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    return '${(bytes / 1024).toStringAsFixed(0)} KB';
+  }
 }
