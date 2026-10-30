@@ -111,9 +111,15 @@ jobs:
       - name: Build TDLib JSON libraries for Android
         shell: bash
         run: |
+          set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y gperf php-cli perl ninja-build
-          sdkmanager "platforms;android-34" "cmake;3.22.1"
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [[ -z "$sdk_root" ]]; then echo 'Android SDK root is not configured.' >&2; exit 1; fi
+          sdkmanager="$sdk_root/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "$sdkmanager" ]]; then sdkmanager="$(find "$sdk_root/cmdline-tools" -type f -name sdkmanager -print -quit)"; fi
+          if [[ -z "$sdkmanager" || ! -x "$sdkmanager" ]]; then echo "sdkmanager not found in $sdk_root/cmdline-tools" >&2; exit 1; fi
+          "$sdkmanager" "platforms;android-34" "cmake;3.22.1"
           td="$RUNNER_TEMP/tdlib-src"
           git init "$td"
           git -C "$td" remote add origin https://github.com/tdlib/td.git
