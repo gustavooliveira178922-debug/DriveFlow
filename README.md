@@ -58,7 +58,7 @@ Provide `api_id` and `api_hash` through a secure build-time configuration mechan
 
 ## Releases
 
-Push a version tag such as `v1.0.14`. `.github/workflows/release.yml` builds a Windows x64 installer and macOS DMG, then attaches them to a GitHub Release. Android is intentionally released separately. GitHub repository secrets expected by release builds:
+Push a version tag such as `v1.0.15`. `.github/workflows/release.yml` builds a Windows x64 installer and macOS DMG, then attaches them to a GitHub Release. Android is intentionally released separately. GitHub repository secrets expected by release builds:
 
 - `TELEGRAM_API_ID`
 - `TELEGRAM_API_HASH`
@@ -70,8 +70,8 @@ Unsigned builds are suitable for internal distribution only; Windows SmartScreen
 
 Artifact names:
 
-- `DriveFlow-Setup-v1.0.14-x64.exe`
-- `DriveFlow-macOS-v1.0.14.dmg`
+- `DriveFlow-Setup-v1.0.15-x64.exe`
+- `DriveFlow-macOS-v1.0.15.dmg`
 
 ## Current scope
 

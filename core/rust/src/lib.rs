@@ -111,7 +111,7 @@ pub unsafe extern "C" fn driveflow_telegram_send_text(chat_id: i64, text: *const
     let result = (|| -> Result<Value, String> {
         if text.is_null() { return Err("missing_argument".into()); }
         let text = CStr::from_ptr(text).to_str().map_err(|_| "invalid_text")?;
-        let mut guard = SESSION.lock().map_err(|_| "session_lock_poisoned")?;
+        let mut guard = session().lock().map_err(|_| "session_lock_poisoned")?;
         let current = guard.as_mut().ok_or("telegram_not_started")?;
         current.bridge.send_text(chat_id, text).map_err(|e| e.to_string())?;
         Ok(json!({"ok":true}))
