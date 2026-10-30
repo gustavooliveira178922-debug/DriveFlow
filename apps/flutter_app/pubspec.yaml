@@ -1,7 +1,7 @@
 name: driveflow
 description: A native Telegram-powered personal cloud file manager.
 publish_to: none
-version: 1.0.9+10
+version: 1.0.10+11
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
