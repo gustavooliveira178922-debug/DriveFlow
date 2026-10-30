@@ -1,0 +1,56 @@
+name: Publish desktop installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: DriveFlow desktop release version
+        required: true
+        type: string
+        default: 1.0.10
+      source_run:
+        description: Successful Windows/macOS artifact run ID
+        required: true
+        type: string
+        default: "40990037516"
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows installer artifact
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.source_run }}
+          name: windows-installer
+          path: release-assets/windows-installer
+      - name: Download macOS DMG artifact
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.source_run }}
+          name: macos-dmg
+          path: release-assets/macos-dmg
+      - name: Name desktop release assets
+        shell: bash
+        run: |
+          version="${{ inputs.release_version }}"
+          mkdir -p release
+          find release-assets/windows-installer -name '*.exe' -exec cp {} "release/DriveFlow-Setup-v${version}-x64.exe" \;
+          find release-assets/macos-dmg -name '*.dmg' -exec cp {} "release/DriveFlow-macOS-v${version}.dmg" \;
+          test -f "release/DriveFlow-Setup-v${version}-x64.exe"
+          test -f "release/DriveFlow-macOS-v${version}.dmg"
+      - name: Publish desktop release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.release_version }}
+          target_commitish: main
+          files: release/*
+          fail_on_unmatched_files: true
