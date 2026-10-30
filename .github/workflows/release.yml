@@ -116,7 +116,7 @@ jobs:
         env:
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
-        run: flutter build apk --release --split-per-abi --dart-define=TELEGRAM_API_ID=$TELEGRAM_API_ID --dart-define=TELEGRAM_API_HASH=$TELEGRAM_API_HASH
+        run: flutter build apk --release --dart-define=TELEGRAM_API_ID=$TELEGRAM_API_ID --dart-define=TELEGRAM_API_HASH=$TELEGRAM_API_HASH
       - uses: actions/upload-artifact@v4
         with:
           name: android-apks
@@ -193,7 +193,7 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           mkdir -p release
           find release-assets/windows-installer -name '*.exe' -exec cp {} "release/DriveFlow-Setup-v${version}-x64.exe" \;
-          find release-assets/android-apks -name '*arm64-v8a*.apk' -exec cp {} "release/DriveFlow-Android-v${version}-release.apk" \;
+          find release-assets/android-apks -name '*.apk' -exec cp {} "release/DriveFlow-Android-v${version}-release.apk" \;
           find release-assets/macos-dmg -name '*.dmg' -exec cp {} "release/DriveFlow-macOS-v${version}.dmg" \;
       - uses: softprops/action-gh-release@v2
         with:
