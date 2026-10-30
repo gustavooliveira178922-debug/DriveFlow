@@ -24,6 +24,9 @@ struct Session {
     history_chat_id: Option<i64>,
     messages: Vec<Value>,
     files: Vec<Value>,
+    my_user_id: Option<i64>,
+    saved_messages_chat_id: Option<i64>,
+    me_requested: bool,
 }
 
 static SESSION: OnceLock<Mutex<Option<Session>>> = OnceLock::new();
@@ -59,7 +62,7 @@ pub unsafe extern "C" fn driveflow_telegram_start(api_id: i32, api_hash: *const 
         let bridge = TelegramBridge::load().map_err(|e| e.to_string())?;
         let mut guard = session().lock().map_err(|_| "session_lock_poisoned")?;
         *guard = Some(Session { bridge, api_id, api_hash: hash, database_dir: dir, encryption_key: key,
-            parameters_sent: false, chats_requested: false, authorization_state: "authorizationStateWaitTdlibParameters".into(), error: None, chats: Vec::new(), history_chat_id: None, messages: Vec::new(), files: Vec::new() });
+            parameters_sent: false, chats_requested: false, authorization_state: "authorizationStateWaitTdlibParameters".into(), error: None, chats: Vec::new(), history_chat_id: None, messages: Vec::new(), files: Vec::new(), my_user_id: None, saved_messages_chat_id: None, me_requested: false });
         Ok(json!({"ok":true}))
     })();
     into_c_string(result.unwrap_or_else(|e| json!({"ok":false,"error":e})).to_string())
@@ -150,17 +153,42 @@ pub extern "C" fn driveflow_telegram_status() -> *mut c_char {
                         s.bridge.request_personal_chats(200).map_err(|e| e.to_string())?;
                         s.chats_requested = true;
                     }
+                    if state == "authorizationStateReady" && !s.me_requested {
+                        s.bridge.request_me().map_err(|e| e.to_string())?;
+                        s.me_requested = true;
+                    }
                 }
             } else if kind == "updateNewChat" {
                 if let Some(chat) = update.get("chat") {
-                    if chat.pointer("/type/@type").and_then(Value::as_str) == Some("chatTypePrivate") {
+                    let private_user = chat.pointer("/type/user_id").and_then(Value::as_i64);
+                    if chat.pointer("/type/@type").and_then(Value::as_str) == Some("chatTypePrivate") && private_user.is_some() && private_user == s.my_user_id {
                         let id = chat.get("id").cloned().unwrap_or(Value::Null);
-                        if !s.chats.iter().any(|c| c.get("id") == Some(&id)) { s.chats.push(chat.clone()); }
+                        s.saved_messages_chat_id = id.as_i64();
+                        let mut saved_chat = chat.clone();
+                        saved_chat["title"] = Value::String("Saved Messages".into());
+                        saved_chat["is_saved_messages"] = Value::Bool(true);
+                        if !s.chats.iter().any(|c| c.get("id") == Some(&id)) { s.chats.push(saved_chat); }
                     }
+                }
+            } else if kind == "user" && update.get("@extra").and_then(Value::as_str) == Some("driveflow_me") {
+                if let Some(user_id) = update.get("id").and_then(Value::as_i64) {
+                    s.my_user_id = Some(user_id);
+                    s.bridge.request_saved_messages_chat(user_id).map_err(|e| e.to_string())?;
+                }
+            } else if kind == "chat" && update.get("@extra").and_then(Value::as_str) == Some("driveflow_saved_messages") {
+                if update.pointer("/type/@type").and_then(Value::as_str) == Some("chatTypePrivate") && update.pointer("/type/user_id").and_then(Value::as_i64) == s.my_user_id {
+                    let mut saved_chat = update.clone();
+                    saved_chat["title"] = Value::String("Saved Messages".into());
+                    saved_chat["is_saved_messages"] = Value::Bool(true);
+                    let id = saved_chat.get("id").and_then(Value::as_i64);
+                    s.saved_messages_chat_id = id;
+                    if !s.chats.iter().any(|c| c.get("id").and_then(Value::as_i64) == id) { s.chats.push(saved_chat); }
                 }
             } else if kind == "updateChatTitle" {
                 let id = update.get("chat_id");
-                if let Some(chat) = s.chats.iter_mut().find(|c| c.get("id") == id) { chat["title"] = update.get("title").cloned().unwrap_or(Value::Null); }
+                if Some(id.and_then(Value::as_i64).unwrap_or_default()) != s.saved_messages_chat_id {
+                    if let Some(chat) = s.chats.iter_mut().find(|c| c.get("id") == id) { chat["title"] = update.get("title").cloned().unwrap_or(Value::Null); }
+                }
             } else if kind == "messages" && update.get("@extra").and_then(Value::as_str) == Some("driveflow_history") {
                 s.messages = update.get("messages").and_then(Value::as_array).cloned().unwrap_or_default();
             } else if kind == "updateFile" {
@@ -187,7 +215,7 @@ pub extern "C" fn driveflow_telegram_status() -> *mut c_char {
 #[no_mangle]
 pub extern "C" fn driveflow_telegram_chats() -> *mut c_char {
     let guard = session().lock().ok();
-    let response = guard.and_then(|g| g.as_ref().map(|s| json!({"ok":true,"chats":s.chats})))
+    let response = guard.and_then(|g| g.as_ref().map(|s| json!({"ok":true,"chats":s.chats.iter().filter(|c| c.get("id").and_then(Value::as_i64) == s.saved_messages_chat_id).collect::<Vec<_>>()})))
         .unwrap_or_else(|| json!({"ok":false,"error":"tdlib_not_initialized"}));
     into_c_string(response.to_string())
 }

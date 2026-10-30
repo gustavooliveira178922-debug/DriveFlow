@@ -98,6 +98,14 @@ impl TelegramBridge {
         self.send_request(&json!({ "@type": "loadChats", "chat_list": { "@type": "chatListMain" }, "limit": limit.clamp(1, 1000) }))
     }
 
+    pub fn request_me(&self) -> Result<(), TelegramError> {
+        self.send_request(&json!({ "@type": "getMe", "@extra": "driveflow_me" }))
+    }
+
+    pub fn request_saved_messages_chat(&self, user_id: i64) -> Result<(), TelegramError> {
+        self.send_request(&json!({ "@type": "createPrivateChat", "user_id": user_id, "force": false, "@extra": "driveflow_saved_messages" }))
+    }
+
     pub fn request_chat(&self, chat_id: i64) -> Result<(), TelegramError> {
         self.send_request(&json!({ "@type": "getChat", "chat_id": chat_id }))
     }

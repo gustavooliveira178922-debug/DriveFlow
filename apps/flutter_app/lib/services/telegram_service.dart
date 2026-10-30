@@ -80,7 +80,7 @@ class TelegramService {
     final chats = (payload['chats'] as List<dynamic>? ?? const []);
     return chats.map((item) {
       final chat = item as Map<String, dynamic>;
-      return TelegramChat(id: int.parse(chat['id'].toString()), title: (chat['title'] as String?) ?? 'Personal chat');
+      return TelegramChat(id: int.parse(chat['id'].toString()), title: (chat['title'] as String?) ?? 'Saved Messages', isSelf: chat['is_saved_messages'] == true);
     }).toList(growable: false);
   }
 

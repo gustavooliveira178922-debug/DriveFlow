@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../app/theme.dart';
 import '../../services/native_bridge.dart';
 import '../../services/telegram_service.dart';
+import '../../services/google_account_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({required this.onConnected, super.key});
@@ -19,10 +21,16 @@ class _LoginScreenState extends State<LoginScreen> {
   final _password = TextEditingController();
   bool _codeSent = false;
   bool _passwordRequired = false;
+  bool _googleBusy = false;
+  GoogleAccount? _googleAccount;
+  String? _googleClientId;
   bool _busy = false;
   String? _lastTelegramError;
   TelegramAuthStep _step = TelegramAuthStep.starting;
   final _telegram = TelegramService(NativeBridge.load());
+  final _google = GoogleAccountService();
+  static const _secureStorage = FlutterSecureStorage();
+  static const _googleClientIdKey = 'driveflow.google.oauth_client_id';
   Timer? _poller;
 
   @override
@@ -31,6 +39,7 @@ class _LoginScreenState extends State<LoginScreen> {
     _telegram.initialize().catchError((Object error) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not start Telegram: $error')));
     });
+    _loadGoogleClientId();
     _poller = Timer.periodic(const Duration(milliseconds: 700), (_) {
       if (!mounted) return;
       final step = _telegram.authStep;
@@ -39,7 +48,7 @@ class _LoginScreenState extends State<LoginScreen> {
         _lastTelegramError = telegramError;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Telegram: $telegramError')));
       }
-      if (step == TelegramAuthStep.ready) {
+      if (step == TelegramAuthStep.ready && _googleAccount != null) {
         _poller?.cancel();
         widget.onConnected();
       } else {
@@ -59,6 +68,41 @@ class _LoginScreenState extends State<LoginScreen> {
     _password.dispose();
     _poller?.cancel();
     super.dispose();
+  }
+
+  Future<void> _connectGoogle() async {
+    var clientId = GoogleAccountService.clientId.isNotEmpty ? GoogleAccountService.clientId : _googleClientId;
+    if (clientId == null || clientId.trim().isEmpty) {
+      final controller = TextEditingController();
+      clientId = await showDialog<String>(context: context, builder: (context) => AlertDialog(
+        title: const Text('Set up Google sign-in'),
+        content: TextField(controller: controller, autofocus: true, decoration: const InputDecoration(labelText: 'Google OAuth client ID', hintText: '...apps.googleusercontent.com')),
+        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(context, controller.text.trim()), child: const Text('Continue'))],
+      ));
+      controller.dispose();
+      if (clientId == null || clientId.isEmpty) return;
+      await _secureStorage.write(key: _googleClientIdKey, value: clientId);
+      _googleClientId = clientId;
+    }
+    setState(() => _googleBusy = true);
+    try {
+      final account = await _google.signIn(clientIdOverride: clientId);
+      if (mounted) setState(() {
+        _googleAccount = account;
+        final phoneNumber = account.phoneNumber;
+        if (phoneNumber != null && phoneNumber.trim().isNotEmpty) _phone.text = phoneNumber;
+      });
+    } on Object catch (error) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$error')));
+    } finally {
+      if (mounted) setState(() => _googleBusy = false);
+    }
+  }
+
+  Future<void> _loadGoogleClientId() async {
+    if (GoogleAccountService.clientId.isNotEmpty) return;
+    final clientId = await _secureStorage.read(key: _googleClientIdKey);
+    if (mounted && clientId != null && clientId.isNotEmpty) setState(() => _googleClientId = clientId);
   }
 
   @override
@@ -98,8 +142,18 @@ class _LoginScreenState extends State<LoginScreen> {
                       if (compact) ...[_Brand(), const SizedBox(height: 28)],
                       Text(_passwordRequired ? 'Enter your password' : _codeSent ? 'Check your Telegram' : 'Connect Telegram', style: Theme.of(context).textTheme.headlineMedium),
                       const SizedBox(height: 8),
-                      Text(_passwordRequired ? 'Your account has two-step verification enabled.' : _codeSent ? 'Enter the sign-in code sent to your account.' : _step == TelegramAuthStep.starting ? 'Connecting securely to Telegram…' : 'Use your phone number to sign in securely.', style: Theme.of(context).textTheme.bodyMedium),
+                      Text(_passwordRequired ? 'Your account has two-step verification enabled.' : _codeSent ? 'Enter the sign-in code sent to your account.' : _step == TelegramAuthStep.starting ? 'Connecting securely to Telegram…' : 'Connect a Google account, then verify your Telegram phone number to open Saved Messages.', style: Theme.of(context).textTheme.bodyMedium),
                       const SizedBox(height: 26),
+                      if (!_codeSent && !_passwordRequired) ...[
+                        SizedBox(width: double.infinity, height: 46, child: OutlinedButton.icon(
+                          onPressed: _googleBusy ? null : _connectGoogle,
+                          icon: _googleBusy ? const SizedBox.square(dimension: 17, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.account_circle_outlined),
+                          label: Text(_googleAccount == null ? 'Continue with Google' : 'Google · ${_googleAccount!.email}', overflow: TextOverflow.ellipsis),
+                        )),
+                        const SizedBox(height: 10),
+                        const Text('Google can share a phone number to prefill this field. Confirm the number, then Telegram will verify it with a sign-in code.', style: TextStyle(color: DriveFlowTheme.muted, fontSize: 11, height: 1.5)),
+                        const SizedBox(height: 20),
+                      ],
                       if (_passwordRequired) ...[
                         const Text('TWO-STEP VERIFICATION', style: TextStyle(fontSize: 10, letterSpacing: 1.2, color: DriveFlowTheme.muted)),
                         const SizedBox(height: 8),
@@ -114,7 +168,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         TextField(controller: _code, keyboardType: TextInputType.number, decoration: const InputDecoration(hintText: 'Enter code', prefixIcon: Icon(Icons.password))),
                       ],
                       const SizedBox(height: 18),
-                      SizedBox(width: double.infinity, height: 48, child: FilledButton(onPressed: _busy || !(_step == TelegramAuthStep.waitingForPhone || _step == TelegramAuthStep.waitingForCode || _step == TelegramAuthStep.waitingForPassword) ? null : () async {
+                      SizedBox(width: double.infinity, height: 48, child: FilledButton(onPressed: _busy || (_step == TelegramAuthStep.waitingForPhone && _googleAccount == null) || !(_step == TelegramAuthStep.waitingForPhone || _step == TelegramAuthStep.waitingForCode || _step == TelegramAuthStep.waitingForPassword) ? null : () async {
                         setState(() => _busy = true);
                         try {
                           if (_passwordRequired) {

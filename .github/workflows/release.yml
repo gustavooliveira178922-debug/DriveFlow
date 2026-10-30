@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version (for example 1.0.0)
+        description: Release version (for example 1.0.12)
         required: true
         type: string
 
@@ -78,7 +78,8 @@ jobs:
         env:
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
-        run: flutter build windows --release --dart-define=TELEGRAM_API_ID=$env:TELEGRAM_API_ID --dart-define=TELEGRAM_API_HASH=$env:TELEGRAM_API_HASH
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+        run: flutter build windows --release --dart-define=TELEGRAM_API_ID=$env:TELEGRAM_API_ID --dart-define=TELEGRAM_API_HASH=$env:TELEGRAM_API_HASH --dart-define=GOOGLE_OAUTH_CLIENT_ID=$env:GOOGLE_OAUTH_CLIENT_ID
       - name: Bundle Rust core and TDLib
         shell: pwsh
         run: |
@@ -163,8 +164,9 @@ jobs:
         env:
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
         run: |
-          flutter build macos --release --dart-define=TELEGRAM_API_ID=$TELEGRAM_API_ID --dart-define=TELEGRAM_API_HASH=$TELEGRAM_API_HASH
+          flutter build macos --release --dart-define=TELEGRAM_API_ID=$TELEGRAM_API_ID --dart-define=TELEGRAM_API_HASH=$TELEGRAM_API_HASH --dart-define=GOOGLE_OAUTH_CLIENT_ID=$GOOGLE_OAUTH_CLIENT_ID
           mkdir -p build/macos/Build/Products/Release/driveflow.app/Contents/Frameworks
           cp native/macos/libdriveflow_core.dylib build/macos/Build/Products/Release/driveflow.app/Contents/Frameworks/
           cp native/tdlib/macos/libtdjson.dylib native/tdlib/macos/libssl.3.dylib native/tdlib/macos/libcrypto.3.dylib build/macos/Build/Products/Release/driveflow.app/Contents/Frameworks/
