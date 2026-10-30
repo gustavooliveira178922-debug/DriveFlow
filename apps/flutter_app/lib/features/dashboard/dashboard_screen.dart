@@ -1,6 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
 
 import '../../app/theme.dart';
+import '../../services/native_bridge.dart';
+import '../../services/telegram_service.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({required this.onDisconnect, super.key});
@@ -12,7 +16,64 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   int _selected = 0;
-  String _chat = 'Saved Messages';
+  final _telegram = TelegramService(NativeBridge.load());
+  List<TelegramChat> _chats = const [];
+  int? _selectedChatId;
+  Timer? _chatPoller;
+
+  String get _chat {
+    for (final chat in _chats) {
+      if (chat.id == _selectedChatId) return chat.title;
+    }
+    return 'Choose personal chat';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshChats();
+    _chatPoller = Timer.periodic(const Duration(seconds: 1), (_) => _refreshChats());
+  }
+
+  @override
+  void dispose() {
+    _chatPoller?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refreshChats() async {
+    try {
+      final chats = await _telegram.fetchPersonalChats();
+      if (!mounted) return;
+      setState(() {
+        _chats = chats;
+        if (_selectedChatId == null && chats.isNotEmpty) _selectedChatId = chats.first.id;
+      });
+    } on Object {
+      // TDLib may still be loading chat-list updates just after authorization.
+    }
+  }
+
+  Future<void> _chooseFiles() async {
+    if (_selectedChatId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Choose a personal chat first.')));
+      return;
+    }
+    final result = await FilePicker.platform.pickFiles(allowMultiple: true, withData: false);
+    if (result == null || !mounted) return;
+    for (final file in result.files) {
+      final path = file.path;
+      if (path == null) continue;
+      try {
+        await _telegram.sendFile(chatId: _selectedChatId!, path: path);
+      } on Object catch (error) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not send ${file.name}: $error')));
+        return;
+      }
+    }
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Sent ${result.files.length} file(s) to $_chat.')));
+  }
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(builder: (context, constraints) {
@@ -29,14 +90,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   Row(children: [
                     Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(_selected == 0 ? 'Overview' : const ['Overview', 'Files', 'Transfers', 'Settings'][_selected], style: Theme.of(context).textTheme.headlineMedium), const SizedBox(height: 5), const Text('Your personal cloud, in one place.', style: TextStyle(color: DriveFlowTheme.muted))])),
                     if (compact)
-                      PopupMenuButton<String>(onSelected: (value) => setState(() => _chat = value), itemBuilder: (context) => const [PopupMenuItem(value: 'Saved Messages', child: Text('Saved Messages')), PopupMenuItem(value: 'Choose chat…', child: Text('Choose chat…'))], icon: const Icon(Icons.send_rounded, color: DriveFlowTheme.blue))
+                      _ChatButton(chat: _chat, chats: _chats, onChanged: (value) => setState(() => _selectedChatId = value), compact: true)
                     else
-                      _ChatButton(chat: _chat, onChanged: (value) => setState(() => _chat = value)),
+                      _ChatButton(chat: _chat, chats: _chats, onChanged: (value) => setState(() => _selectedChatId = value)),
                     const SizedBox(width: 14),
                     CircleAvatar(backgroundColor: DriveFlowTheme.panelRaised, child: IconButton(tooltip: 'Disconnect', onPressed: widget.onDisconnect, icon: const Icon(Icons.person_outline, size: 19))),
                   ]),
                   const SizedBox(height: 28),
-                  Expanded(child: _selected == 3 ? _SettingsView(onDisconnect: widget.onDisconnect) : _OverviewView(chat: _chat)),
+                  Expanded(child: _selected == 3 ? _SettingsView(onDisconnect: widget.onDisconnect) : _OverviewView(chat: _chat, canSend: _selectedChatId != null, onChooseFiles: _chooseFiles)),
                     ]),
                   ),
                 ),
@@ -54,8 +115,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
 }
 
 class _OverviewView extends StatelessWidget {
-  const _OverviewView({required this.chat});
+  const _OverviewView({required this.chat, required this.canSend, required this.onChooseFiles});
   final String chat;
+  final bool canSend;
+  final VoidCallback onChooseFiles;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(builder: (context, constraints) {
@@ -78,7 +141,7 @@ class _OverviewView extends StatelessWidget {
           Expanded(flex: 2, child: _TransferQueuePanel(chat: chat, height: 208)),
         ]),
         const SizedBox(height: 22),
-        _DropPanel(chat: chat),
+        _DropPanel(chat: chat, canSend: canSend, onChooseFiles: onChooseFiles),
       ]));
   });
 }
@@ -164,14 +227,16 @@ class _Panel extends StatelessWidget {
 }
 
 class _DropPanel extends StatelessWidget {
-  const _DropPanel({required this.chat});
+  const _DropPanel({required this.chat, required this.canSend, required this.onChooseFiles});
   final String chat;
+  final bool canSend;
+  final VoidCallback onChooseFiles;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(builder: (context, constraints) {
         final compact = constraints.maxWidth < 500;
         final message = Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('Add files to DriveFlow', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)), const SizedBox(height: 4), Text('Choose files or drop them here to send to $chat.', style: const TextStyle(fontSize: 12, color: DriveFlowTheme.muted))]);
-        final button = OutlinedButton.icon(onPressed: () {}, icon: const Icon(Icons.upload_file_rounded, size: 17), label: const Text('Choose files'), style: OutlinedButton.styleFrom(foregroundColor: DriveFlowTheme.accent, side: const BorderSide(color: DriveFlowTheme.line)));
+        final button = OutlinedButton.icon(onPressed: canSend ? onChooseFiles : null, icon: const Icon(Icons.upload_file_rounded, size: 17), label: const Text('Choose files'), style: OutlinedButton.styleFrom(foregroundColor: DriveFlowTheme.accent, side: const BorderSide(color: DriveFlowTheme.line)));
         return Container(height: compact ? 166 : 124, padding: EdgeInsets.symmetric(horizontal: compact ? 16 : 26, vertical: compact ? 14 : 0), decoration: BoxDecoration(color: DriveFlowTheme.panel.withValues(alpha: .68), borderRadius: BorderRadius.circular(18), border: Border.all(color: DriveFlowTheme.line)), child: compact
             ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Container(width: 42, height: 42, decoration: BoxDecoration(color: DriveFlowTheme.accent.withValues(alpha: .1), borderRadius: BorderRadius.circular(14)), child: const Icon(Icons.add_rounded, color: DriveFlowTheme.accent)), const SizedBox(width: 12), Expanded(child: message)]), const Spacer(), Align(alignment: Alignment.centerRight, child: button)])
             : Row(children: [Container(width: 48, height: 48, decoration: BoxDecoration(color: DriveFlowTheme.accent.withValues(alpha: .1), borderRadius: BorderRadius.circular(15)), child: const Icon(Icons.add_rounded, color: DriveFlowTheme.accent)), const SizedBox(width: 16), Expanded(child: message), button, const SizedBox(width: 22)]));
@@ -203,12 +268,14 @@ class _NavItem extends StatelessWidget {
 }
 
 class _ChatButton extends StatelessWidget {
-  const _ChatButton({required this.chat, required this.onChanged});
+  const _ChatButton({required this.chat, required this.chats, required this.onChanged, this.compact = false});
   final String chat;
-  final ValueChanged<String> onChanged;
+  final List<TelegramChat> chats;
+  final ValueChanged<int> onChanged;
+  final bool compact;
 
   @override
-  Widget build(BuildContext context) => PopupMenuButton<String>(onSelected: onChanged, itemBuilder: (context) => const [PopupMenuItem(value: 'Saved Messages', child: Text('Saved Messages')), PopupMenuItem(value: 'Personal chat', child: Text('Personal chat')), PopupMenuItem(value: 'Choose chat…', child: Text('Choose chat…'))], child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9), decoration: BoxDecoration(color: DriveFlowTheme.panel, borderRadius: BorderRadius.circular(12), border: Border.all(color: DriveFlowTheme.line)), child: Row(children: [const Icon(Icons.send_rounded, color: DriveFlowTheme.blue, size: 15), const SizedBox(width: 8), Text(chat, style: const TextStyle(fontSize: 11)), const SizedBox(width: 8), const Icon(Icons.expand_more, size: 16, color: DriveFlowTheme.muted)])));
+  Widget build(BuildContext context) => PopupMenuButton<int>(onSelected: onChanged, itemBuilder: (context) => chats.map((item) => PopupMenuItem(value: item.id, child: Text(item.title, overflow: TextOverflow.ellipsis))).toList(), icon: compact ? const Icon(Icons.send_rounded, color: DriveFlowTheme.blue) : null, child: compact ? null : Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9), decoration: BoxDecoration(color: DriveFlowTheme.panel, borderRadius: BorderRadius.circular(12), border: Border.all(color: DriveFlowTheme.line)), child: Row(children: [const Icon(Icons.send_rounded, color: DriveFlowTheme.blue, size: 15), const SizedBox(width: 8), Text(chat, style: const TextStyle(fontSize: 11)), const SizedBox(width: 8), const Icon(Icons.expand_more, size: 16, color: DriveFlowTheme.muted)])));
 }
 
 class _SettingsView extends StatelessWidget {

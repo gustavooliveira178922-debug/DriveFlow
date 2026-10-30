@@ -33,6 +33,10 @@ pub struct TelegramBridge {
     destroy: DestroyClient,
 }
 
+// The bridge is stored behind the session mutex, which serializes every TDLib
+// call and ensures only one thread receives updates at a time.
+unsafe impl Send for TelegramBridge {}
+
 impl TelegramBridge {
     pub fn load() -> Result<Self, TelegramError> {
         let library = load_tdlib_library()?;
@@ -128,6 +132,17 @@ fn load_tdlib_library() -> Result<Library, TelegramError> {
     let candidates: &[&str] = if cfg!(target_os = "windows") { &["tdjson.dll", "libtdjson.dll"] }
         else if cfg!(target_os = "macos") { &["libtdjson.dylib", "tdjson"] }
         else { &["libtdjson.so", "tdjson"] };
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    {
+        if let Ok(executable) = std::env::current_exe() {
+            if let Some(directory) = executable.parent() {
+                let bundled = if cfg!(target_os = "macos") { directory.join("..").join("Frameworks").join("libtdjson.dylib") }
+                    else { directory.join("tdjson.dll") };
+                // SAFETY: the packaged path is app-owned; symbols are validated below.
+                if let Ok(library) = unsafe { Library::new(&bundled) } { return Ok(library); }
+            }
+        }
+    }
     for name in candidates {
         // SAFETY: loading a library is unsafe; symbols are checked before use and its
         // handle is retained as long as any function pointer may be called.

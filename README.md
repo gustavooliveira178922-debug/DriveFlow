@@ -2,7 +2,7 @@
 
 DriveFlow is a native Flutter application with a Rust core for organizing files and transferring them directly to the user's own Telegram account. It has no ads, subscriptions, or relay server. Desktop builds use Flutter's native Windows/macOS runners; Android uses a native APK. There is no browser shell or WebView.
 
-> Starter scaffold: the UI and local Rust queue are implemented as a foundation. Telegram network operations require a locally built TDLib and Telegram `api_id`/`api_hash` supplied by the developer. Never commit those credentials or a user's session database.
+> Telegram sign-in, personal chat discovery, and direct document sends are wired through Rust FFI and TDLib. Release builds compile and bundle TDLib per platform. Transfer progress controls, queue persistence, local recursive file indexing, and store signing/notarization remain future work.
 
 ## Layout
 
@@ -20,7 +20,7 @@ scripts/              Local release helpers
 
 - Flutter stable with Windows, macOS, and Android targets enabled
 - Rust stable, plus each platform's native toolchain
-- TDLib built for each target architecture and placed beside the app/native library search path
+- TDLib JSON library built for each release target (the release workflow does this from official TDLib source)
 - Telegram API credentials from [my.telegram.org](https://my.telegram.org)
 - Inno Setup 6 for Windows installer creation
 
@@ -48,7 +48,7 @@ The desktop Rust library names are `driveflow_core.dll` (Windows), `libdriveflow
 
 ## Telegram / TDLib integration
 
-TDLib owns authorization state and encrypted database storage. The app must call `setTdlibParameters` after `authorizationStateWaitTdlibParameters`, then respond to authorization state updates, including phone number, code, and optional password. Chat discovery and sending use official TDLib requests; the starter bridge models these operations and returns an explicit unavailable error until a compatible TDLib library is loaded. Do not send credentials to a service: all account traffic is direct between TDLib and Telegram.
+TDLib owns authorization state and encrypted database storage. The Rust core responds to `authorizationStateWaitTdlibParameters`, handles phone number, login code and optional two-step password states, loads personal private chats, and sends selected files directly with TDLib. The UI polls a serialized Rust snapshot of TDLib updates. The encrypted session key is stored through Flutter Secure Storage, and files go directly between the app and Telegram. There is no relay service.
 
 Provide `api_id` and `api_hash` through a secure build-time configuration mechanism. Treat the TDLib database encryption key and session directory as secrets. Use OS secure storage for the database key; do not store it in preferences or logs. TDLib session databases can contain sensitive account data.
 
@@ -71,4 +71,4 @@ Artifact names:
 
 ## Current scope
 
-The starter includes the dark dashboard, login/code UI, chat picker contract, Rust queue/storage primitives, TDLib JSON request builders, and release packaging skeleton. The Dart FFI currently exposes only core version/status; `TelegramService` methods intentionally stop with explicit unimplemented errors until the TDLib session lifecycle and update stream are wired through that ABI. The file chooser/drop surface and dashboard data are UI scaffolding, not working transfers. Full TDLib native builds, secure key storage adapter, recursive filesystem indexing, upload pause/resume wired to TDLib updates, signing identities, and store notarization must be configured before a release is production-ready. No fake Telegram data or relay backend is included.
+The app currently supports account sign-in, personal-chat selection, and file-picker sends. It does not yet provide a resumable upload queue, pause/cancel controls, drag-and-drop, local recursive indexing, or signing/notarization. GitHub Actions is the validation path for native builds because Flutter and Rust toolchains are not installed in this local workspace. No fake Telegram data or relay backend is included.

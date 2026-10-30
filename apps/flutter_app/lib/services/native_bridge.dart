@@ -1,5 +1,6 @@
 import 'dart:ffi' as ffi;
 import 'dart:io' show Platform;
+import 'package:path/path.dart' as p;
 
 import 'package:ffi/ffi.dart';
 
@@ -13,10 +14,11 @@ final class NativeBridge {
 
   static NativeBridge load() {
     try {
+      final executableDirectory = p.dirname(Platform.resolvedExecutable);
       final library = Platform.isWindows
-          ? ffi.DynamicLibrary.open('driveflow_core.dll')
+          ? ffi.DynamicLibrary.open(p.join(executableDirectory, 'driveflow_core.dll'))
           : Platform.isMacOS
-              ? ffi.DynamicLibrary.open('libdriveflow_core.dylib')
+              ? ffi.DynamicLibrary.open(p.join(executableDirectory, '..', 'Frameworks', 'libdriveflow_core.dylib'))
               : Platform.isAndroid
                   ? ffi.DynamicLibrary.open('libdriveflow_core.so')
                   : throw UnsupportedError('DriveFlow native core is not available on this platform.');
@@ -41,14 +43,55 @@ final class NativeBridge {
   }
 
   String getTelegramStatus() {
+    return _call0('driveflow_telegram_status');
+  }
+
+  String startTelegram({required int apiId, required String apiHash, required String databaseDirectory, required String encryptionKey}) {
     final library = _library;
     if (library == null) return '{"ok":false,"error":"native_core_unavailable"}';
-    final status = library.lookupFunction<ffi.Pointer<Utf8> Function(), ffi.Pointer<Utf8> Function()>('driveflow_telegram_status');
-    final pointer = status();
+    final hash = apiHash.toNativeUtf8();
+    final directory = databaseDirectory.toNativeUtf8();
+    final key = encryptionKey.toNativeUtf8();
     try {
-      return pointer.toDartString();
-    } finally {
-      library.lookupFunction<ffi.Void Function(ffi.Pointer<Utf8>), void Function(ffi.Pointer<Utf8>)>('driveflow_string_free')(pointer);
-    }
+      final call = library.lookupFunction<ffi.Pointer<Utf8> Function(ffi.Int32, ffi.Pointer<Utf8>, ffi.Pointer<Utf8>, ffi.Pointer<Utf8>), ffi.Pointer<Utf8> Function(int, ffi.Pointer<Utf8>, ffi.Pointer<Utf8>, ffi.Pointer<Utf8>)>('driveflow_telegram_start');
+      return _take(call(apiId, hash, directory, key));
+    } finally { calloc.free(hash); calloc.free(directory); calloc.free(key); }
+  }
+
+  String submitPhone(String phone) => _callString('driveflow_telegram_phone', phone);
+  String submitCode(String code) => _callString('driveflow_telegram_code', code);
+  String submitPassword(String password) => _callString('driveflow_telegram_password', password);
+  String getTelegramChats() => _call0('driveflow_telegram_chats');
+
+  String sendFile(int chatId, String path) {
+    final library = _library;
+    if (library == null) return '{"ok":false,"error":"native_core_unavailable"}';
+    final nativePath = path.toNativeUtf8();
+    try {
+      final call = library.lookupFunction<ffi.Pointer<Utf8> Function(ffi.Int64, ffi.Pointer<Utf8>), ffi.Pointer<Utf8> Function(int, ffi.Pointer<Utf8>)>('driveflow_telegram_send_file');
+      return _take(call(chatId, nativePath));
+    } finally { calloc.free(nativePath); }
+  }
+
+  String _call0(String symbol) {
+    final library = _library;
+    if (library == null) return '{"ok":false,"error":"native_core_unavailable"}';
+    final call = library.lookupFunction<ffi.Pointer<Utf8> Function(), ffi.Pointer<Utf8> Function()>(symbol);
+    return _take(call());
+  }
+
+  String _callString(String symbol, String value) {
+    final library = _library;
+    if (library == null) return '{"ok":false,"error":"native_core_unavailable"}';
+    final input = value.toNativeUtf8();
+    try {
+      final call = library.lookupFunction<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>), ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(symbol);
+      return _take(call(input));
+    } finally { calloc.free(input); }
+  }
+
+  String _take(ffi.Pointer<Utf8> pointer) {
+    try { return pointer.toDartString(); }
+    finally { _library!.lookupFunction<ffi.Void Function(ffi.Pointer<Utf8>), void Function(ffi.Pointer<Utf8>)>('driveflow_string_free')(pointer); }
   }
 }

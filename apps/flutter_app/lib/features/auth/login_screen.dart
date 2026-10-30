@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../app/theme.dart';
@@ -15,13 +16,48 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _phone = TextEditingController();
   final _code = TextEditingController();
+  final _password = TextEditingController();
   bool _codeSent = false;
+  bool _passwordRequired = false;
+  bool _busy = false;
+  String? _lastTelegramError;
+  TelegramAuthStep _step = TelegramAuthStep.starting;
   final _telegram = TelegramService(NativeBridge.load());
+  Timer? _poller;
+
+  @override
+  void initState() {
+    super.initState();
+    _telegram.initialize().catchError((Object error) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not start Telegram: $error')));
+    });
+    _poller = Timer.periodic(const Duration(milliseconds: 700), (_) {
+      if (!mounted) return;
+      final step = _telegram.authStep;
+      final telegramError = _telegram.lastError;
+      if (telegramError != null && telegramError != _lastTelegramError) {
+        _lastTelegramError = telegramError;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Telegram: $telegramError')));
+      }
+      if (step == TelegramAuthStep.ready) {
+        _poller?.cancel();
+        widget.onConnected();
+      } else {
+        setState(() {
+          _step = step;
+          _codeSent = step == TelegramAuthStep.waitingForCode || step == TelegramAuthStep.waitingForPassword;
+          _passwordRequired = step == TelegramAuthStep.waitingForPassword;
+        });
+      }
+    });
+  }
 
   @override
   void dispose() {
     _phone.dispose();
     _code.dispose();
+    _password.dispose();
+    _poller?.cancel();
     super.dispose();
   }
 
@@ -60,11 +96,15 @@ class _LoginScreenState extends State<LoginScreen> {
                     decoration: BoxDecoration(color: DriveFlowTheme.panel.withValues(alpha: .92), borderRadius: BorderRadius.circular(24), border: Border.all(color: DriveFlowTheme.line)),
                     child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
                       if (compact) ...[_Brand(), const SizedBox(height: 28)],
-                      Text(_codeSent ? 'Check your Telegram' : 'Connect Telegram', style: Theme.of(context).textTheme.headlineMedium),
+                      Text(_passwordRequired ? 'Enter your password' : _codeSent ? 'Check your Telegram' : 'Connect Telegram', style: Theme.of(context).textTheme.headlineMedium),
                       const SizedBox(height: 8),
-                      Text(_codeSent ? 'Enter the sign-in code sent to your account.' : 'Use your phone number to sign in securely.', style: Theme.of(context).textTheme.bodyMedium),
+                      Text(_passwordRequired ? 'Your account has two-step verification enabled.' : _codeSent ? 'Enter the sign-in code sent to your account.' : _step == TelegramAuthStep.starting ? 'Connecting securely to Telegram…' : 'Use your phone number to sign in securely.', style: Theme.of(context).textTheme.bodyMedium),
                       const SizedBox(height: 26),
-                      if (!_codeSent) ...[
+                      if (_passwordRequired) ...[
+                        const Text('TWO-STEP VERIFICATION', style: TextStyle(fontSize: 10, letterSpacing: 1.2, color: DriveFlowTheme.muted)),
+                        const SizedBox(height: 8),
+                        TextField(controller: _password, obscureText: true, decoration: const InputDecoration(hintText: 'Password', prefixIcon: Icon(Icons.lock_outline))),
+                      ] else if (!_codeSent) ...[
                         const Text('PHONE NUMBER', style: TextStyle(fontSize: 10, letterSpacing: 1.2, color: DriveFlowTheme.muted)),
                         const SizedBox(height: 8),
                         TextField(controller: _phone, keyboardType: TextInputType.phone, decoration: const InputDecoration(hintText: '+1 555 000 0000', prefixIcon: Icon(Icons.phone_iphone))),
@@ -74,20 +114,23 @@ class _LoginScreenState extends State<LoginScreen> {
                         TextField(controller: _code, keyboardType: TextInputType.number, decoration: const InputDecoration(hintText: 'Enter code', prefixIcon: Icon(Icons.password))),
                       ],
                       const SizedBox(height: 18),
-                      SizedBox(width: double.infinity, height: 48, child: FilledButton(onPressed: () async {
+                      SizedBox(width: double.infinity, height: 48, child: FilledButton(onPressed: _busy || !(_step == TelegramAuthStep.waitingForPhone || _step == TelegramAuthStep.waitingForCode || _step == TelegramAuthStep.waitingForPassword) ? null : () async {
+                        setState(() => _busy = true);
                         try {
-                          if (_codeSent) {
+                          if (_passwordRequired) {
+                            await _telegram.submitPassword(_password.text);
+                          } else if (_codeSent) {
                             await _telegram.submitCode(_code.text.trim());
-                            if (_telegram.authStep == TelegramAuthStep.ready) widget.onConnected();
                           } else {
                             await _telegram.submitPhoneNumber(_phone.text.trim());
-                            setState(() => _codeSent = true);
                           }
                         } on Object catch (error) {
                           if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Telegram sign-in is not configured yet: $error')));
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Telegram sign-in failed: $error')));
+                        } finally {
+                          if (mounted) setState(() => _busy = false);
                         }
-                      }, child: Text(_codeSent ? 'Verify code' : 'Continue'))),
+                      }, child: _busy ? const SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2)) : Text(_passwordRequired ? 'Verify password' : _codeSent ? 'Verify code' : 'Continue'))),
                       const SizedBox(height: 14),
                       const Text('Authentication is handled by Telegram. Your code is never sent to DriveFlow servers.', textAlign: TextAlign.center, style: TextStyle(color: DriveFlowTheme.muted, fontSize: 11, height: 1.5)),
                     ]),

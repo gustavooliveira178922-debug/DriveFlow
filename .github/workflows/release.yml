@@ -26,6 +26,25 @@ jobs:
           targets: x86_64-pc-windows-msvc
       - name: Install Inno Setup
         run: choco install innosetup --yes --no-progress
+      - name: Build TDLib JSON library
+        shell: pwsh
+        run: |
+          $deps = Join-Path $env:RUNNER_TEMP 'vcpkg'
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git $deps
+          & "$deps/bootstrap-vcpkg.bat" -disableMetrics
+          & "$deps/vcpkg.exe" install gperf:x64-windows-static openssl:x64-windows-static zlib:x64-windows-static
+          if ($LASTEXITCODE -ne 0) { throw 'Could not install TDLib build dependencies.' }
+          $td = Join-Path $env:RUNNER_TEMP 'tdlib-src'
+          git clone --depth 1 --branch v1.8.69 https://github.com/tdlib/td.git $td
+          cmake -S $td -B (Join-Path $td 'build') -A x64 `
+            "-DCMAKE_TOOLCHAIN_FILE=$deps/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static -DTD_ENABLE_JNI=OFF -DTD_ENABLE_DOTNET=OFF -DTD_ENABLE_LTO=ON
+          cmake --build (Join-Path $td 'build') --config Release --target tdjson --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw 'TDLib JSON build failed.' }
+          $target = Get-ChildItem (Join-Path $td 'build') -Recurse -Filter tdjson.dll | Select-Object -First 1
+          if (-not $target) { throw 'TDLib build did not produce tdjson.dll.' }
+          New-Item -ItemType Directory -Force apps/flutter_app/native/tdlib/windows/x64 | Out-Null
+          Copy-Item $target.FullName apps/flutter_app/native/tdlib/windows/x64/tdjson.dll
       - name: Generate native runner and fetch packages
         working-directory: apps/flutter_app
         run: |
@@ -61,7 +80,7 @@ jobs:
         run: |
           $out = "apps/flutter_app/build/windows/x64/runner/Release"
           Copy-Item "core/rust/target/x86_64-pc-windows-msvc/release/driveflow_core.dll" $out
-          if (Test-Path "native/tdlib/windows/x64/tdjson.dll") { Copy-Item "native/tdlib/windows/x64/tdjson.dll" $out }
+          Copy-Item "apps/flutter_app/native/tdlib/windows/x64/tdjson.dll" $out
       - name: Build installer
         shell: pwsh
         run: |
@@ -84,7 +103,23 @@ jobs:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
       - uses: nttld/setup-ndk@v1
         with:
-          ndk-version: r27c
+          ndk-version: r23c
+      - uses: android-actions/setup-android@v3
+      - name: Build TDLib JSON libraries for Android
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gperf php-cli perl ninja-build
+          sdkmanager "platforms;android-34" "cmake;3.22.1"
+          td="$RUNNER_TEMP/tdlib-src"
+          git clone --depth 1 --branch v1.8.69 https://github.com/tdlib/td.git "$td"
+          cd "$td/example/android"
+          ./build-openssl.sh "$ANDROID_SDK_ROOT" 23.2.8568313 third-party/openssl openssl-3.3.0
+          ./build-tdlib.sh "$ANDROID_SDK_ROOT" 23.2.8568313 third-party/openssl c++_static JSON 21 "arm64-v8a armeabi-v7a x86_64"
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            mkdir -p "$GITHUB_WORKSPACE/apps/flutter_app/android/app/src/main/jniLibs/$abi"
+            cp "tdlib/libs/$abi/libtdjson.so" "$GITHUB_WORKSPACE/apps/flutter_app/android/app/src/main/jniLibs/$abi/"
+          done
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-ndk
@@ -132,6 +167,29 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - name: Build TDLib JSON library for macOS
+        shell: bash
+        run: |
+          brew install gperf openssl@3
+          td="$RUNNER_TEMP/tdlib-src"
+          git clone --depth 1 --branch v1.8.69 https://github.com/tdlib/td.git "$td"
+          cmake -S "$td" -B "$td/build" -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix openssl@3)" -DTD_ENABLE_JNI=OFF -DTD_ENABLE_DOTNET=OFF -DTD_ENABLE_LTO=ON
+          cmake --build "$td/build" --target tdjson --parallel 2
+          tdjson=$(find "$td/build" -name 'libtdjson.dylib' -print -quit)
+          test -n "$tdjson"
+          mkdir -p apps/flutter_app/native/tdlib/macos
+          cp "$tdjson" apps/flutter_app/native/tdlib/macos/libtdjson.dylib
+          install_name_tool -id @rpath/libtdjson.dylib apps/flutter_app/native/tdlib/macos/libtdjson.dylib
+          cp "$(brew --prefix openssl@3)/lib/libssl.3.dylib" apps/flutter_app/native/tdlib/macos/
+          cp "$(brew --prefix openssl@3)/lib/libcrypto.3.dylib" apps/flutter_app/native/tdlib/macos/
+          install_name_tool -id @rpath/libssl.3.dylib apps/flutter_app/native/tdlib/macos/libssl.3.dylib
+          install_name_tool -id @rpath/libcrypto.3.dylib apps/flutter_app/native/tdlib/macos/libcrypto.3.dylib
+          install_name_tool -change "$(brew --prefix openssl@3)/lib/libcrypto.3.dylib" @rpath/libcrypto.3.dylib apps/flutter_app/native/tdlib/macos/libssl.3.dylib || true
+          install_name_tool -add_rpath @loader_path apps/flutter_app/native/tdlib/macos/libssl.3.dylib || true
+          install_name_tool -change "$(brew --prefix openssl@3)/lib/libssl.3.dylib" @rpath/libssl.3.dylib apps/flutter_app/native/tdlib/macos/libtdjson.dylib || true
+          install_name_tool -change "$(brew --prefix openssl@3)/lib/libcrypto.3.dylib" @rpath/libcrypto.3.dylib apps/flutter_app/native/tdlib/macos/libtdjson.dylib || true
+          install_name_tool -add_rpath @loader_path apps/flutter_app/native/tdlib/macos/libtdjson.dylib || true
       - name: Generate native runner and fetch packages
         working-directory: apps/flutter_app
         run: |
@@ -168,7 +226,7 @@ jobs:
           flutter build macos --release --dart-define=TELEGRAM_API_ID=$TELEGRAM_API_ID --dart-define=TELEGRAM_API_HASH=$TELEGRAM_API_HASH
           mkdir -p build/macos/Build/Products/Release/driveflow.app/Contents/Frameworks
           cp native/macos/libdriveflow_core.dylib build/macos/Build/Products/Release/driveflow.app/Contents/Frameworks/
-          if [ -f native/tdlib/macos/libtdjson.dylib ]; then cp native/tdlib/macos/libtdjson.dylib build/macos/Build/Products/Release/driveflow.app/Contents/Frameworks/; fi
+          cp native/tdlib/macos/libtdjson.dylib native/tdlib/macos/libssl.3.dylib native/tdlib/macos/libcrypto.3.dylib build/macos/Build/Products/Release/driveflow.app/Contents/Frameworks/
       - name: Package DMG
         run: |
           version="${GITHUB_REF_NAME#v}"
