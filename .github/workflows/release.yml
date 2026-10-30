@@ -34,6 +34,20 @@ jobs:
       - name: Build Rust core
         working-directory: core/rust
         run: cargo build --release --target x86_64-pc-windows-msvc
+      - name: Analyze Flutter app
+        working-directory: apps/flutter_app
+        shell: pwsh
+        run: |
+          $report = flutter analyze --no-pub 2>&1
+          $exitCode = $LASTEXITCODE
+          $report | ForEach-Object { Write-Output "$_" }
+          foreach ($line in $report) {
+            if ($line.ToString() -match '(error|warning) •') {
+              $message = $line.ToString().Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Output "::error::$message"
+            }
+          }
+          exit $exitCode
       - name: Build Flutter Windows release
         working-directory: apps/flutter_app
         env:
@@ -80,6 +94,19 @@ jobs:
       - name: Build Android Rust libraries
         working-directory: core/rust
         run: cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ../../apps/flutter_app/android/app/src/main/jniLibs build --release
+      - name: Analyze Flutter app
+        working-directory: apps/flutter_app
+        run: |
+          set +e
+          flutter analyze --no-pub 2>&1 | tee /tmp/driveflow-analyze.log
+          status=${PIPESTATUS[0]}
+          while IFS= read -r line; do
+            if [[ "$line" == *" error • "* || "$line" == *" warning • "* ]]; then
+              safe=$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g' -e 's/\n/%0A/g')
+              echo "::error::$safe"
+            fi
+          done < /tmp/driveflow-analyze.log
+          exit "$status"
       - name: Build APK
         working-directory: apps/flutter_app
         env:
@@ -113,6 +140,19 @@ jobs:
           cargo build --release --target x86_64-apple-darwin
           mkdir -p ../../apps/flutter_app/native/macos
           lipo -create target/aarch64-apple-darwin/release/libdriveflow_core.dylib target/x86_64-apple-darwin/release/libdriveflow_core.dylib -output ../../apps/flutter_app/native/macos/libdriveflow_core.dylib
+      - name: Analyze Flutter app
+        working-directory: apps/flutter_app
+        run: |
+          set +e
+          flutter analyze --no-pub 2>&1 | tee /tmp/driveflow-analyze.log
+          status=${PIPESTATUS[0]}
+          while IFS= read -r line; do
+            if [[ "$line" == *" error • "* || "$line" == *" warning • "* ]]; then
+              safe=$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g' -e 's/\n/%0A/g')
+              echo "::error::$safe"
+            fi
+          done < /tmp/driveflow-analyze.log
+          exit "$status"
       - name: Build macOS app
         working-directory: apps/flutter_app
         env:
