@@ -107,7 +107,7 @@ jobs:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
       - uses: nttld/setup-ndk@v1
         with:
-          ndk-version: r23c
+          ndk-version: r27c
       - name: Build TDLib JSON libraries for Android
         shell: bash
         run: |
@@ -126,8 +126,8 @@ jobs:
           git -C "$td" fetch --depth 1 origin 0e88653dcbf4e44c73cb655a05b58cd749a91169
           git -C "$td" checkout --detach FETCH_HEAD
           cd "$td/example/android"
-          ./build-openssl.sh "$ANDROID_SDK_ROOT" 23.2.8568313 third-party/openssl openssl-3.3.0
-          ./build-tdlib.sh "$ANDROID_SDK_ROOT" 23.2.8568313 third-party/openssl c++_static JSON 21 "arm64-v8a armeabi-v7a x86_64"
+          ./build-openssl.sh "$ANDROID_SDK_ROOT" 27.2.12479018 third-party/openssl openssl-3.3.0
+          ./build-tdlib.sh "$ANDROID_SDK_ROOT" 27.2.12479018 third-party/openssl c++_static JSON 21 "arm64-v8a armeabi-v7a x86_64"
           for abi in arm64-v8a armeabi-v7a x86_64; do
             mkdir -p "$GITHUB_WORKSPACE/apps/flutter_app/android/app/src/main/jniLibs/$abi"
             cp "tdlib/libs/$abi/libtdjson.so" "$GITHUB_WORKSPACE/apps/flutter_app/android/app/src/main/jniLibs/$abi/"
