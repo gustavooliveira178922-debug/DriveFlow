@@ -76,7 +76,11 @@ class _LoginScreenState extends State<LoginScreen> {
       final controller = TextEditingController();
       clientId = await showDialog<String>(context: context, builder: (context) => AlertDialog(
         title: const Text('Set up Google sign-in'),
-        content: TextField(controller: controller, autofocus: true, decoration: const InputDecoration(labelText: 'Google OAuth client ID', hintText: '...apps.googleusercontent.com')),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text('Enter your Google Cloud Desktop OAuth client ID once. DriveFlow will then open your default browser so you can choose and sign in to a Google account.'),
+          const SizedBox(height: 12),
+          TextField(controller: controller, autofocus: true, decoration: const InputDecoration(labelText: 'Google OAuth client ID', hintText: '...apps.googleusercontent.com')),
+        ]),
         actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(context, controller.text.trim()), child: const Text('Continue'))],
       ));
       controller.dispose();
@@ -148,10 +152,10 @@ class _LoginScreenState extends State<LoginScreen> {
                         SizedBox(width: double.infinity, height: 46, child: OutlinedButton.icon(
                           onPressed: _googleBusy ? null : _connectGoogle,
                           icon: _googleBusy ? const SizedBox.square(dimension: 17, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.account_circle_outlined),
-                          label: Text(_googleAccount == null ? 'Continue with Google' : 'Google · ${_googleAccount!.email}', overflow: TextOverflow.ellipsis),
+                          label: Text(_googleAccount == null ? 'Choose Google account in browser' : 'Google · ${_googleAccount!.email} · Change', overflow: TextOverflow.ellipsis),
                         )),
                         const SizedBox(height: 10),
-                        const Text('Google can share a phone number to prefill this field. Confirm the number, then Telegram will verify it with a sign-in code.', style: TextStyle(color: DriveFlowTheme.muted, fontSize: 11, height: 1.5)),
+                        const Text('DriveFlow opens your default browser and asks Google which account to use. Google may prefill your phone number; Telegram still verifies it with a sign-in code.', style: TextStyle(color: DriveFlowTheme.muted, fontSize: 11, height: 1.5)),
                         const SizedBox(height: 20),
                       ],
                       if (_passwordRequired) ...[

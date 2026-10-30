@@ -50,7 +50,7 @@ The desktop Rust library names are `driveflow_core.dll` (Windows), `libdriveflow
 
 TDLib owns authorization state and encrypted database storage. The Rust core responds to `authorizationStateWaitTdlibParameters`, handles phone number, login code and optional two-step password states, resolves the signed-in user's **Saved Messages** self-chat, and sends selected files directly with TDLib. Group chats and other people's private chats are filtered out. Recent documents can be downloaded directly through TDLib. The UI polls a serialized Rust snapshot of TDLib updates. The encrypted session key is stored through Flutter Secure Storage, and files go directly between the app and Telegram. There is no relay service.
 
-Google sign-in is required as the DriveFlow app identity and runs in the system browser with OAuth and PKCE. It does not replace Telegram authentication or provide access to Telegram storage. DriveFlow requests the Google People API phone-number scope to prefill the Telegram phone field when Google returns a number; the field stays editable, and the user must still submit that number and Telegram's sign-in code. Create an OAuth client in Google Cloud Console (installed/desktop app, loopback redirects), enable the People API, add the phone-number scope to the consent screen, and either enter its client ID in the app when prompted or set the Actions secret `GOOGLE_OAUTH_CLIENT_ID` for release builds. Google may require OAuth app verification before this sensitive scope can be used broadly; personal testing can be limited to configured test users.
+Google sign-in is required as the DriveFlow app identity and opens the operating system's default browser using OAuth and PKCE. The browser asks which Google account to use, then returns to DriveFlow through a temporary loopback callback. It does not replace Telegram authentication or provide access to Telegram storage. DriveFlow requests the Google People API phone-number scope to prefill the Telegram phone field when Google returns a number; the field stays editable, and the user must still submit that number and Telegram's sign-in code. Create an OAuth client in Google Cloud Console (installed/desktop app, loopback redirects), enable the People API, add the phone-number scope to the consent screen, and either enter its client ID in the app when prompted or set the Actions secret `GOOGLE_OAUTH_CLIENT_ID` for release builds. Google may require OAuth app verification before this sensitive scope can be used broadly; personal testing can be limited to configured test users.
 
 DriveFlow cloud folders are stored in the user's own Saved Messages as small text metadata messages. Uploaded document captions carry a folder ID in a `dir-0-/...-/dir` marker, following the folder-reference style shown in Telegram; folder definitions carry the ID and encoded path. This keeps folder names and file placement available to other DriveFlow installs using the same Telegram account. Telegram itself does not provide folders inside Saved Messages, so these metadata markers are visible in Telegram. Renaming a folder writes a new definition while keeping its ID, so old file messages do not need to be edited. The current browser reads the latest 100 chat messages.
 
@@ -58,7 +58,7 @@ Provide `api_id` and `api_hash` through a secure build-time configuration mechan
 
 ## Releases
 
-Push a version tag such as `v1.0.13`. `.github/workflows/release.yml` builds a Windows x64 installer and macOS DMG, then attaches them to a GitHub Release. Android is intentionally released separately. GitHub repository secrets expected by release builds:
+Push a version tag such as `v1.0.14`. `.github/workflows/release.yml` builds a Windows x64 installer and macOS DMG, then attaches them to a GitHub Release. Android is intentionally released separately. GitHub repository secrets expected by release builds:
 
 - `TELEGRAM_API_ID`
 - `TELEGRAM_API_HASH`
@@ -70,8 +70,8 @@ Unsigned builds are suitable for internal distribution only; Windows SmartScreen
 
 Artifact names:
 
-- `DriveFlow-Setup-v1.0.13-x64.exe`
-- `DriveFlow-macOS-v1.0.13.dmg`
+- `DriveFlow-Setup-v1.0.14-x64.exe`
+- `DriveFlow-macOS-v1.0.14.dmg`
 
 ## Current scope
 

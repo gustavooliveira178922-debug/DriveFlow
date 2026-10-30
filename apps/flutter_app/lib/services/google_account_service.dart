@@ -37,6 +37,9 @@ class GoogleAccountService {
         'redirect_uri': redirectUri,
         'response_type': 'code',
         'scope': _scopes,
+        // Always show Google's account chooser, even if the default browser
+        // already has an active Google session.
+        'prompt': 'select_account',
         'state': state,
         'code_challenge': challenge,
         'code_challenge_method': 'S256',
