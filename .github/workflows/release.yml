@@ -1,0 +1,154 @@
+name: Native release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version (for example 1.0.0)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
+      - name: Generate native runner and fetch packages
+        working-directory: apps/flutter_app
+        run: |
+          flutter create --project-name driveflow --platforms=windows,macos,android .
+          flutter pub get
+      - name: Build Rust core
+        working-directory: core/rust
+        run: cargo build --release --target x86_64-pc-windows-msvc
+      - name: Build Flutter Windows release
+        working-directory: apps/flutter_app
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        run: flutter build windows --release --dart-define=TELEGRAM_API_ID=$env:TELEGRAM_API_ID --dart-define=TELEGRAM_API_HASH=$env:TELEGRAM_API_HASH
+      - name: Bundle Rust core and TDLib
+        shell: pwsh
+        run: |
+          $out = "apps/flutter_app/build/windows/x64/runner/Release"
+          Copy-Item "core/rust/target/x86_64-pc-windows-msvc/release/driveflow_core.dll" $out
+          if (Test-Path "native/tdlib/windows/x64/tdjson.dll") { Copy-Item "native/tdlib/windows/x64/tdjson.dll" $out }
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $version = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.version }}" } else { "${{ github.ref_name }}".TrimStart("v") }
+          iscc "/DAppVersion=$version" packaging/windows/installer/driveflow.iss
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: build/installer/DriveFlow-Setup-*.exe
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+      - uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+      - name: Generate native runner and fetch packages
+        working-directory: apps/flutter_app
+        run: |
+          flutter create --project-name driveflow --platforms=windows,macos,android .
+          flutter pub get
+      - name: Build Android Rust libraries
+        working-directory: core/rust
+        run: cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ../../apps/flutter_app/android/app/src/main/jniLibs build --release
+      - name: Build APK
+        working-directory: apps/flutter_app
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        run: flutter build apk --release --split-per-abi --dart-define=TELEGRAM_API_ID=$TELEGRAM_API_ID --dart-define=TELEGRAM_API_HASH=$TELEGRAM_API_HASH
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apks
+          path: apps/flutter_app/build/app/outputs/flutter-apk/*.apk
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - name: Generate native runner and fetch packages
+        working-directory: apps/flutter_app
+        run: |
+          flutter create --project-name driveflow --platforms=windows,macos,android .
+          flutter pub get
+      - name: Build universal Rust core
+        working-directory: core/rust
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          mkdir -p ../../apps/flutter_app/native/macos
+          lipo -create target/aarch64-apple-darwin/release/libdriveflow_core.dylib target/x86_64-apple-darwin/release/libdriveflow_core.dylib -output ../../apps/flutter_app/native/macos/libdriveflow_core.dylib
+      - name: Build macOS app
+        working-directory: apps/flutter_app
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        run: |
+          flutter build macos --release --dart-define=TELEGRAM_API_ID=$TELEGRAM_API_ID --dart-define=TELEGRAM_API_HASH=$TELEGRAM_API_HASH
+          mkdir -p build/macos/Build/Products/Release/driveflow.app/Contents/Frameworks
+          cp native/macos/libdriveflow_core.dylib build/macos/Build/Products/Release/driveflow.app/Contents/Frameworks/
+          if [ -f native/tdlib/macos/libtdjson.dylib ]; then cp native/tdlib/macos/libtdjson.dylib build/macos/Build/Products/Release/driveflow.app/Contents/Frameworks/; fi
+      - name: Package DMG
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [ "${GITHUB_EVENT_NAME}" = workflow_dispatch ]; then version="${{ inputs.version }}"; fi
+          bash packaging/macos/package_dmg.sh "$version"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: build/release/DriveFlow-macOS-*.dmg
+
+  publish:
+    needs: [windows, android, macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+      - name: Rename artifacts with release version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p release
+          find release-assets/windows-installer -name '*.exe' -exec cp {} "release/DriveFlow-Setup-v${version}-x64.exe" \;
+          find release-assets/android-apks -name '*arm64-v8a*.apk' -exec cp {} "release/DriveFlow-Android-v${version}-release.apk" \;
+          find release-assets/macos-dmg -name '*.dmg' -exec cp {} "release/DriveFlow-macOS-v${version}.dmg" \;
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*

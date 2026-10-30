@@ -1,0 +1,45 @@
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+build/
+coverage/
+*.iml
+.idea/
+.vscode/
+
+# Rust
+target/
+
+# Native build outputs / signing material
+*.dll
+*.so
+*.dylib
+*.framework/
+*.xcarchive/
+*.dSYM/
+*.apk
+*.aab
+*.dmg
+*.exe
+*.p12
+*.jks
+*.keystore
+*.mobileprovision
+
+# Local configuration and private Telegram API credentials
+.env
+.env.*
+!.env.example
+**/local.properties
+**/key.properties
+**/secrets.*
+**/tdlib-data/
+**/telegram-session/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+desktop.ini
