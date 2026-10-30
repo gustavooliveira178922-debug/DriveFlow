@@ -2,7 +2,7 @@
 
 DriveFlow is a native Flutter application with a Rust core for organizing files and transferring them directly to the user's own Telegram account. It has no ads, subscriptions, or relay server. Desktop builds use Flutter's native Windows/macOS runners; Android uses a native APK. There is no browser shell or WebView.
 
-> Telegram sign-in, personal chat discovery, direct document sends, desktop drag-and-drop, local folder management, and split-file recovery are wired through Flutter/Rust FFI and TDLib. Release builds compile and bundle TDLib for Windows and macOS. Transfer progress controls, persisted queues, and store signing/notarization remain future work.
+> Telegram sign-in, Saved Messages access, direct document sends, desktop drag-and-drop, synchronized cloud-folder organization, local folder management, and split-file recovery are wired through Flutter/Rust FFI and TDLib. Release builds compile and bundle TDLib for Windows and macOS. Transfer progress controls, persisted queues, and store signing/notarization remain future work.
 
 ## Layout
 
@@ -52,11 +52,13 @@ TDLib owns authorization state and encrypted database storage. The Rust core res
 
 Google sign-in is required as the DriveFlow app identity and runs in the system browser with OAuth and PKCE. It does not replace Telegram authentication or provide access to Telegram storage. DriveFlow requests the Google People API phone-number scope to prefill the Telegram phone field when Google returns a number; the field stays editable, and the user must still submit that number and Telegram's sign-in code. Create an OAuth client in Google Cloud Console (installed/desktop app, loopback redirects), enable the People API, add the phone-number scope to the consent screen, and either enter its client ID in the app when prompted or set the Actions secret `GOOGLE_OAUTH_CLIENT_ID` for release builds. Google may require OAuth app verification before this sensitive scope can be used broadly; personal testing can be limited to configured test users.
 
+DriveFlow cloud folders are stored in the user's own Saved Messages as small text metadata messages. Uploaded document captions carry a folder ID in a `dir-0-/...-/dir` marker, following the folder-reference style shown in Telegram; folder definitions carry the ID and encoded path. This keeps folder names and file placement available to other DriveFlow installs using the same Telegram account. Telegram itself does not provide folders inside Saved Messages, so these metadata markers are visible in Telegram. Renaming a folder writes a new definition while keeping its ID, so old file messages do not need to be edited. The current browser reads the latest 100 chat messages.
+
 Provide `api_id` and `api_hash` through a secure build-time configuration mechanism. Treat the TDLib database encryption key and session directory as secrets. Use OS secure storage for the database key; do not store it in preferences or logs. TDLib session databases can contain sensitive account data.
 
 ## Releases
 
-Push a version tag such as `v1.0.12`. `.github/workflows/release.yml` builds a Windows x64 installer and macOS DMG, then attaches them to a GitHub Release. Android is intentionally released separately. GitHub repository secrets expected by release builds:
+Push a version tag such as `v1.0.13`. `.github/workflows/release.yml` builds a Windows x64 installer and macOS DMG, then attaches them to a GitHub Release. Android is intentionally released separately. GitHub repository secrets expected by release builds:
 
 - `TELEGRAM_API_ID`
 - `TELEGRAM_API_HASH`
@@ -68,9 +70,9 @@ Unsigned builds are suitable for internal distribution only; Windows SmartScreen
 
 Artifact names:
 
-- `DriveFlow-Setup-v1.0.12-x64.exe`
-- `DriveFlow-macOS-v1.0.12.dmg`
+- `DriveFlow-Setup-v1.0.13-x64.exe`
+- `DriveFlow-macOS-v1.0.13.dmg`
 
 ## Current scope
 
-The app supports account sign-in, personal-chat selection, file-picker and desktop drag-and-drop sends, local folders, recent Telegram document browsing, direct downloads, and large-file splitting. Selecting a DriveFlow manifest downloads its parts and rebuilds the original in one flow; SHA-256 is checked before saving. It does not yet provide a resumable upload queue, pause/cancel controls, or signing/notarization. GitHub Actions is the validation path for native builds because Flutter and Rust toolchains are not installed in this local workspace. No fake Telegram data or relay backend is included.
+The app supports Google sign-in followed by required Telegram phone/code verification, Saved Messages-only file browsing, synchronized cloud folders, local folders, file-picker and desktop drag-and-drop sends, direct downloads, and large-file splitting. Selecting a DriveFlow manifest downloads its parts and rebuilds the original in one flow; SHA-256 is checked before saving. It does not yet provide a resumable upload queue, pause/cancel controls, or signing/notarization. GitHub Actions is the validation path for native builds because Flutter and Rust toolchains are not installed in this local workspace. No fake Telegram data or relay backend is included.

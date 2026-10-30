@@ -18,13 +18,26 @@ class TelegramChat {
 }
 
 class TelegramRemoteFile {
-  const TelegramRemoteFile({required this.id, required this.name, required this.size, required this.downloaded, required this.downloading, required this.localPath});
+  const TelegramRemoteFile({required this.id, required this.name, required this.size, required this.downloaded, required this.downloading, required this.localPath, required this.folderPath});
   final int id;
   final String name;
   final int size;
   final bool downloaded;
   final bool downloading;
   final String localPath;
+  final String folderPath;
+}
+
+class TelegramRemoteFolder {
+  const TelegramRemoteFolder({required this.id, required this.path});
+  final String id;
+  final String path;
+}
+
+class TelegramChatFiles {
+  const TelegramChatFiles({required this.files, required this.folders});
+  final List<TelegramRemoteFile> files;
+  final List<TelegramRemoteFolder> folders;
 }
 
 /// Flutter facade over the Rust/TDLib FFI. The Rust core owns the Telegram
@@ -84,12 +97,30 @@ class TelegramService {
     }).toList(growable: false);
   }
 
-  Future<List<TelegramRemoteFile>> fetchChatFiles(int chatId) async {
+  Future<TelegramChatFiles> fetchChatFiles(int chatId) async {
     _native.getTelegramStatus();
     final response = _read(_native.getTelegramHistory(chatId, limit: 100));
     if (response['ok'] != true) throw StateError(_friendlyError(response['error']));
     final messages = response['messages'] as List<dynamic>? ?? const [];
     final files = <TelegramRemoteFile>[];
+    final folders = <TelegramRemoteFolder>[];
+    final knownFolderIds = <String>{};
+    // TDLib returns chat history newest-first, so the first marker for an ID
+    // is the current name; renames append a new marker instead of editing old
+    // messages, which keeps old files valid and works across devices.
+    for (final raw in messages) {
+      final message = raw as Map<String, dynamic>;
+      final content = message['content'] as Map<String, dynamic>?;
+      if (content?['@type'] == 'messageText') {
+        final text = (content?['text'] as Map<String, dynamic>?)?['text'] as String? ?? '';
+        final folder = _decodeFolderDefinition(text);
+        if (folder != null && folder.path.isNotEmpty && knownFolderIds.add(folder.id)) {
+          folders.add(TelegramRemoteFolder(id: folder.id, path: folder.path));
+        }
+        continue;
+      }
+    }
+    final pathsById = {for (final folder in folders) folder.id: folder.path};
     for (final raw in messages) {
       final message = raw as Map<String, dynamic>;
       final content = message['content'] as Map<String, dynamic>?;
@@ -99,6 +130,8 @@ class TelegramService {
       final local = file?['local'] as Map<String, dynamic>?;
       final id = int.tryParse(file?['id']?.toString() ?? '');
       if (id == null) continue;
+      final caption = (content?['caption'] as Map<String, dynamic>?)?['text'] as String? ?? '';
+      final folderId = _decodeFileFolderId(caption);
       files.add(TelegramRemoteFile(
         id: id,
         name: (document?['file_name'] as String?) ?? 'Telegram file',
@@ -106,9 +139,24 @@ class TelegramService {
         downloaded: local?['is_downloading_completed'] == true,
         downloading: local?['is_downloading_active'] == true,
         localPath: (local?['path'] as String?) ?? '',
+        folderPath: folderId == null ? '' : (pathsById[folderId] ?? ''),
       ));
     }
-    return files;
+    return TelegramChatFiles(files: files, folders: folders);
+  }
+
+  String createFolder(int chatId, String path) {
+    final id = base64Url.encode(List<int>.generate(12, (_) => Random.secure().nextInt(256))).replaceAll('=', '');
+    _expectOk(_native.sendText(chatId, _folderDefinition(id, path)));
+    return id;
+  }
+
+  Future<void> renameFolder(int chatId, String oldPath, String newPath, TelegramChatFiles snapshot) async {
+    for (final marker in snapshot.folders) {
+      if (!_isWithin(marker.path, oldPath)) continue;
+      final path = _replaceFolderPrefix(marker.path, oldPath, newPath);
+      _expectOk(_native.sendText(chatId, _folderDefinition(marker.id, path)));
+    }
   }
 
   Future<void> downloadFile(int fileId) async => _expectOk(_native.downloadTelegramFile(fileId));
@@ -118,11 +166,11 @@ class TelegramService {
   // last so DriveFlow can reassemble the original in one operation.
   static const int _partLimit = 1900 * 1024 * 1024;
 
-  Future<void> sendFile({required int chatId, required String path}) async {
+  Future<void> sendFile({required int chatId, required String path, String folderId = ''}) async {
     final source = File(path);
     final length = await source.length();
     if (length <= _partLimit) {
-      _expectOk(_native.sendFile(chatId, path));
+      _expectOk(_native.sendFile(chatId, path, caption: _withFolderMarker(folderId, '')));
       return;
     }
 
@@ -140,7 +188,7 @@ class TelegramService {
       await source.openRead(start, end).pipe(part.openWrite());
       if (await part.length() != end - start) throw StateError('A DriveFlow part was not written completely.');
       parts.add(part.path);
-      final caption = 'DriveFlow part $id ${index + 1}/$partCount';
+      final caption = _withFolderMarker(folderId, 'DriveFlow part $id ${index + 1}/$partCount');
       _expectOk(_native.sendFile(chatId, part.path, caption: caption));
     }
 
@@ -153,8 +201,25 @@ class TelegramService {
       'sha256': checksum,
       'parts': parts.map((path) => path.split(Platform.pathSeparator).last).toList(),
     }), flush: true);
-    _expectOk(_native.sendFile(chatId, manifest.path, caption: 'DriveFlow recovery manifest $id'));
+    _expectOk(_native.sendFile(chatId, manifest.path, caption: _withFolderMarker(folderId, 'DriveFlow recovery manifest $id')));
   }
+
+  static String _folderDefinition(String id, String path) => 'dir-1-/$id/${base64Url.encode(utf8.encode(path)).replaceAll('=', '')}-/dir';
+  static String _withFolderMarker(String folderId, String suffix) => folderId.isEmpty ? suffix : 'dir-0-/$folderId-/dir${suffix.isEmpty ? '' : '\n$suffix'}';
+  static final _folderDefinitionPattern = RegExp(r'dir-1-/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)-/dir');
+  static final _folderMarkerPattern = RegExp(r'dir-0-/([A-Za-z0-9_-]+)-/dir');
+  static ({String id, String path})? _decodeFolderDefinition(String value) {
+    final match = _folderDefinitionPattern.firstMatch(value);
+    if (match == null) return null;
+    try {
+      final token = match.group(2)!;
+      final normalized = token.padRight(token.length + ((4 - token.length % 4) % 4), '=');
+      return (id: match.group(1)!, path: utf8.decode(base64Url.decode(normalized)));
+    } on Object { return null; }
+  }
+  static String? _decodeFileFolderId(String value) => _folderMarkerPattern.firstMatch(value)?.group(1);
+  static bool _isWithin(String candidate, String parent) => candidate == parent || candidate.startsWith('$parent/');
+  static String _replaceFolderPrefix(String candidate, String from, String to) => candidate == from ? to : '$to${candidate.substring(from.length)}';
 
   /// Rebuild a split file selected from disk using its manifest and part files.
   Future<String> joinParts({required String manifestPath, required List<String> selectedPartPaths, required String outputDirectory}) async {

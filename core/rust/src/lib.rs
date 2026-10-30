@@ -107,6 +107,20 @@ pub unsafe extern "C" fn driveflow_telegram_send_file(chat_id: i64, path: *const
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn driveflow_telegram_send_text(chat_id: i64, text: *const c_char) -> *mut c_char {
+    let result = (|| -> Result<Value, String> {
+        if text.is_null() { return Err("missing_argument".into()); }
+        let text = CStr::from_ptr(text).to_str().map_err(|_| "invalid_text")?;
+        let mut guard = SESSION.lock().map_err(|_| "session_lock_poisoned")?;
+        let current = guard.as_mut().ok_or("telegram_not_started")?;
+        current.bridge.send_text(chat_id, text).map_err(|e| e.to_string())?;
+        Ok(json!({"ok":true}))
+    })();
+    into_c_string(result.unwrap_or_else(|e| json!({"ok":false,"error":e})).to_string())
+}
+
+
+#[no_mangle]
 pub extern "C" fn driveflow_telegram_history(chat_id: i64, limit: i32) -> *mut c_char {
     let result = (|| -> Result<Value, String> {
         let mut guard = session().lock().map_err(|_| "session_lock_poisoned".to_string())?;
@@ -191,6 +205,16 @@ pub extern "C" fn driveflow_telegram_status() -> *mut c_char {
                 }
             } else if kind == "messages" && update.get("@extra").and_then(Value::as_str) == Some("driveflow_history") {
                 s.messages = update.get("messages").and_then(Value::as_array).cloned().unwrap_or_default();
+            } else if kind == "updateNewMessage" {
+                if let Some(message) = update.get("message") {
+                    if message.get("chat_id").and_then(Value::as_i64) == s.history_chat_id {
+                        let id = message.get("id").cloned();
+                        s.messages.retain(|item| item.get("id") != id.as_ref());
+                        s.messages.push(message.clone());
+                        s.messages.sort_by(|left, right| right.get("id").and_then(Value::as_i64).cmp(&left.get("id").and_then(Value::as_i64)));
+                        s.messages.truncate(100);
+                    }
+                }
             } else if kind == "updateFile" {
                 if let Some(file) = update.get("file") {
                     if let Some(id) = file.get("id") {

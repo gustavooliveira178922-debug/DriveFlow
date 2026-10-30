@@ -88,6 +88,17 @@ final class NativeBridge {
     } finally { calloc.free(nativePath); calloc.free(nativeCaption); }
   }
 
+  String sendText(int chatId, String text) {
+    final library = _library;
+    if (library == null) return '{"ok":false,"error":"native_core_unavailable"}';
+    final value = text.toNativeUtf8();
+    try {
+      final call = library.lookupFunction<ffi.Pointer<Utf8> Function(ffi.Int64, ffi.Pointer<Utf8>), ffi.Pointer<Utf8> Function(int, ffi.Pointer<Utf8>)>('driveflow_telegram_send_text');
+      return _take(call(chatId, value));
+    } finally { calloc.free(value); }
+  }
+
+
   String _call0(String symbol) {
     final library = _library;
     if (library == null) return '{"ok":false,"error":"native_core_unavailable"}';

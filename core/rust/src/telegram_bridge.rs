@@ -129,6 +129,19 @@ impl TelegramBridge {
         }))
     }
 
+    pub fn send_text(&self, chat_id: i64, text: &str) -> Result<(), TelegramError> {
+        self.send_request(&json!({
+            "@type": "sendMessage", "chat_id": chat_id,
+            "input_message_content": {
+                "@type": "inputMessageText",
+                "text": { "@type": "formattedText", "text": text, "entities": [] },
+                "link_preview_options": { "@type": "linkPreviewOptions", "is_disabled": true },
+                "clear_draft": true
+            }
+        }))
+    }
+
+
     pub fn close(&self) -> Result<(), TelegramError> {
         self.send_request(&json!({ "@type": "close" }))
     }
