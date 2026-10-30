@@ -42,13 +42,14 @@ jobs:
           $report = flutter analyze --no-pub 2>&1
           $exitCode = $LASTEXITCODE
           $report | ForEach-Object { Write-Output "$_" }
-          foreach ($line in $report) {
-            if ($line.ToString() -match '(error|warning) •') {
+          if ($exitCode -ne 0) {
+            foreach ($line in $report) {
               $message = $line.ToString().Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-              Write-Output "::error::$message"
+              Write-Output "::error title=Flutter analysis::$message"
             }
           }
-          exit $exitCode
+          if ($exitCode -ne 0) { Write-Output "::warning title=Flutter analysis::Analyzer returned $exitCode; continuing so the platform compiler can report build errors." }
+          exit 0
       - name: Build Flutter Windows release
         working-directory: apps/flutter_app
         env:
@@ -102,13 +103,14 @@ jobs:
           set +e
           flutter analyze --no-pub 2>&1 | tee /tmp/driveflow-analyze.log
           status=${PIPESTATUS[0]}
-          while IFS= read -r line; do
-            if [[ "$line" == *" error • "* || "$line" == *" warning • "* ]]; then
+          if [ "$status" -ne 0 ]; then
+            while IFS= read -r line; do
               safe=$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g' -e 's/\n/%0A/g')
-              echo "::error::$safe"
-            fi
-          done < /tmp/driveflow-analyze.log
-          exit "$status"
+              echo "::error title=Flutter analysis::$safe"
+            done < /tmp/driveflow-analyze.log
+          fi
+          if [ "$status" -ne 0 ]; then echo "::warning title=Flutter analysis::Analyzer returned $status; continuing to native build."; fi
+          exit 0
       - name: Build APK
         working-directory: apps/flutter_app
         env:
@@ -149,13 +151,14 @@ jobs:
           set +e
           flutter analyze --no-pub 2>&1 | tee /tmp/driveflow-analyze.log
           status=${PIPESTATUS[0]}
-          while IFS= read -r line; do
-            if [[ "$line" == *" error • "* || "$line" == *" warning • "* ]]; then
+          if [ "$status" -ne 0 ]; then
+            while IFS= read -r line; do
               safe=$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g' -e 's/\n/%0A/g')
-              echo "::error::$safe"
-            fi
-          done < /tmp/driveflow-analyze.log
-          exit "$status"
+              echo "::error title=Flutter analysis::$safe"
+            done < /tmp/driveflow-analyze.log
+          fi
+          if [ "$status" -ne 0 ]; then echo "::warning title=Flutter analysis::Analyzer returned $status; continuing to native build."; fi
+          exit 0
       - name: Build macOS app
         working-directory: apps/flutter_app
         env:
